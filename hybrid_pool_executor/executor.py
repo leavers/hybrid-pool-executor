@@ -107,11 +107,16 @@ class PollFuture:
         self._result: Any = None
         self._cancelled: Optional[bool] = None
         self._exc: Optional[BaseException] = None
-        self._loop = asyncio.get_event_loop()
-        self._async_got: asyncio.Event = asyncio.Event()
         self._got: threading.Event = threading.Event()
         self._put_s, self._get_s = socket.socketpair()
         self._call_item_ref = weakref.ref(call_item)
+        # prevent "loop not found" RuntimeError when running in pytest
+        try:
+            self._loop = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError:
+            self._loop = asyncio.get_event_loop_policy().new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        self._async_got: asyncio.Event = asyncio.Event()
 
     @property
     def name(self):
