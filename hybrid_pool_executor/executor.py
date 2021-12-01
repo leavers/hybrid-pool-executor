@@ -9,34 +9,34 @@ import time
 import warnings
 import weakref
 from dataclasses import dataclass, field
-from queue import SimpleQueue, Empty
+from queue import Empty, SimpleQueue
 from typing import Any, Callable, Dict, Hashable, Literal, Optional, Tuple, Union
 from weakref import ReferenceType
 
 MAX_THREADS = 64
 MAX_PROCESSES = 32
 
-WORK_MODE_THREAD = 'thread'
-WORK_MODE_PROCESS = 'process'
-WORK_MODE_ASYNC = 'async'
-WORK_MODE_LOCAL = 'local'
+WORK_MODE_THREAD = "thread"
+WORK_MODE_PROCESS = "process"
+WORK_MODE_ASYNC = "async"
+WORK_MODE_LOCAL = "local"
 work_modes = (WORK_MODE_THREAD, WORK_MODE_PROCESS, WORK_MODE_ASYNC, WORK_MODE_LOCAL)
-WorkMode = Literal['thread', 'process', 'async', 'local']
-ThreadFallbackMode = Literal['process', 'local']
-ProcessFallbackMode = Literal['thread', 'local']
-AsyncFallbackMode = Literal['thread', 'local']
+WorkMode = Literal["thread", "process", "async", "local"]
+ThreadFallbackMode = Literal["process", "local"]
+ProcessFallbackMode = Literal["thread", "local"]
+AsyncFallbackMode = Literal["thread", "local"]
 
-WORKFLOW_MODE_MIX = 'mix'
-WORKFLOW_MODE_BFS = 'bfs'
-WORKFLOW_MODE_DFS = 'dfs'
+WORKFLOW_MODE_MIX = "mix"
+WORKFLOW_MODE_BFS = "bfs"
+WORKFLOW_MODE_DFS = "dfs"
 workflow_modes = (WORKFLOW_MODE_MIX, WORKFLOW_MODE_BFS, WORKFLOW_MODE_DFS)
-WorkflowMode = Literal['mix', 'bfs', 'dfs']
+WorkflowMode = Literal["mix", "bfs", "dfs"]
 
-ERROR_MODE_RAISE = 'raise'
-ERROR_MODE_IGNORE = 'ignore'
-ERROR_MODE_COERCE = 'coerce'
+ERROR_MODE_RAISE = "raise"
+ERROR_MODE_IGNORE = "ignore"
+ERROR_MODE_COERCE = "coerce"
 error_modes = (ERROR_MODE_RAISE, ERROR_MODE_IGNORE, ERROR_MODE_COERCE)
-ErrorMode = Literal['raise', 'ignore', 'coerce']
+ErrorMode = Literal["raise", "ignore", "coerce"]
 
 ACT_NONE = 0
 ACT_DONE = 1
@@ -59,8 +59,10 @@ _manager_threads = weakref.WeakSet()
 _global_shutdown = False
 
 
-# TODO: Wrap executor class to make workflow be able to use other executor implementations.
+# TODO: Wrap executor class to make workflow be able to use other executor
+#       implementations.
 # TODO: Add KeyboardInterrupt, SystemExit handler (optional).
+
 
 @atexit.register
 def _python_exit():
@@ -167,23 +169,22 @@ class PollFuture:
         await self._async_got.wait()
         return self.get()
 
-    def set_result(
-            self,
-            result: Any = None,
-            exception: BaseException = None
-    ):
+    def __await__(self):
+        return self.get_async().__await__()
+
+    def set_result(self, result: Any = None, exception: BaseException = None):
         if self._got.is_set():
-            raise RuntimeError(f'Future result can only be set once.')
+            raise RuntimeError("Future result can only be set once.")
         self._result = result
         self._exc = exception
-        self._put_s.send(b'1')
+        self._put_s.send(b"1")
         self.notify_async_event()
         self._got.set()
 
     def notify_async_event(self):
 
-        # As run_coroutine_threadsafe only accepts coroutine, we need to wrap event.set()
-        # method into an async function.
+        # As run_coroutine_threadsafe only accepts coroutine, we need to wrap
+        # event.set() method into an async function.
         async def set_async(event):
             event.set()
 
@@ -240,11 +241,7 @@ class _ProcessWorkerContext:
 
 
 class _AsyncWorker:
-
-    def __init__(
-            self,
-            ctx: _AsyncWorkerContext = None
-    ):
+    def __init__(self, ctx: _AsyncWorkerContext = None):
         self.ctx = ctx
         self._name = ctx.name
         self._daemon = ctx.daemon
@@ -258,28 +255,29 @@ class _AsyncWorker:
 
     @classmethod
     async def _coroutine(
-            cls,
-            async_func: Callable[..., Any],
-            args: Tuple[Any, ...],
-            kwargs: Dict[str, Any],
-            work_id: Hashable,
-            worker_id: Hashable,
-            async_out: asyncio.Queue
+        cls,
+        async_func: Callable[..., Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        work_id: Hashable,
+        worker_id: Hashable,
+        async_out: asyncio.Queue,
     ):
         result = response = None
         try:
             result = await async_func(*args, **kwargs)
         except Exception as exc:
-            response = _ActionItem(action=ACT_EXCEPTION,
-                                   work_id=work_id,
-                                   worker_id=worker_id,
-                                   result=result,
-                                   exception=exc)
+            response = _ActionItem(
+                action=ACT_EXCEPTION,
+                work_id=work_id,
+                worker_id=worker_id,
+                result=result,
+                exception=exc,
+            )
         else:
-            response = _ActionItem(action=ACT_DONE,
-                                   work_id=work_id,
-                                   worker_id=worker_id,
-                                   result=result)
+            response = _ActionItem(
+                action=ACT_DONE, work_id=work_id, worker_id=worker_id, result=result
+            )
         finally:
             await async_out.put(response)
 
@@ -333,20 +331,26 @@ class _AsyncWorker:
                     # Check if future is cancelled
                     if call_item.cancelled:
                         response_queue.put(
-                            _ActionItem(action=ACT_EXCEPTION,
-                                        work_id=work_id,
-                                        worker_id=worker_id,
-                                        exception=CancelledError(f'Future "{work_id}" has been cancelled'))
+                            _ActionItem(
+                                action=ACT_EXCEPTION,
+                                work_id=work_id,
+                                worker_id=worker_id,
+                                exception=CancelledError(
+                                    f'Future "{work_id}" has been cancelled'
+                                ),
+                            )
                         )
                         continue
                     else:
                         task: asyncio.Task = asyncio.create_task(
-                            coroutine(async_func=call_item.func,
-                                      args=call_item.args,
-                                      kwargs=call_item.kwargs,
-                                      work_id=work_id,
-                                      worker_id=worker_id,
-                                      async_out=async_response_queue)
+                            coroutine(
+                                async_func=call_item.func,
+                                args=call_item.args,
+                                kwargs=call_item.kwargs,
+                                work_id=work_id,
+                                worker_id=worker_id,
+                                async_out=async_response_queue,
+                            )
                         )
                     async_tasks[work_id] = task
                     work_count += 1
@@ -360,8 +364,10 @@ class _AsyncWorker:
                 curr_coroutines -= 1
                 if response.match(ACT_EXCEPTION):
                     err_count += 1
-                if 0 <= ctx.max_work_count <= work_count \
-                        or 0 <= ctx.max_err_count < err_count:
+                if (
+                    0 <= ctx.max_work_count <= work_count
+                    or 0 <= ctx.max_err_count < err_count
+                ):
                     response.add_action(ACT_RESTART)
                     self._exit = True
                     break
@@ -381,9 +387,8 @@ class _AsyncWorker:
 
     def start(self):
         if not self._exit:
-            raise RuntimeError(f'AsyncWorker {self._name} is already started')
-        self._thread = threading.Thread(target=self.run,
-                                        daemon=self._daemon)
+            raise RuntimeError(f"AsyncWorker {self._name} is already started")
+        self._thread = threading.Thread(target=self.run, daemon=self._daemon)
         self._thread.start()
         while self._exit:
             pass  # wait while self.loop is generating
@@ -402,7 +407,6 @@ class _AsyncWorker:
 
 
 class _ThreadWorker:
-
     def __init__(self, ctx: _ThreadWorkerContext):
         self._work_queue = ctx.work_queue
         self._name = ctx.name
@@ -426,16 +430,18 @@ class _ThreadWorker:
         self._work_id = None
 
     def _get_response(
-            self,
-            action: int = ACT_NONE,
-            result: Any = None,
-            exception: BaseException = None
+        self,
+        action: int = ACT_NONE,
+        result: Any = None,
+        exception: BaseException = None,
     ) -> _ActionItem:
-        return _ActionItem(action=action,
-                           work_id=self._work_id,
-                           worker_id=self._name,
-                           result=result,
-                           exception=exception)
+        return _ActionItem(
+            action=action,
+            work_id=self._work_id,
+            worker_id=self._name,
+            result=result,
+            exception=exception,
+        )
 
     def run(self):
         self._exit = False
@@ -496,9 +502,11 @@ class _ThreadWorker:
                 work_count += 1
                 exit_response_ctx()
                 idle_tick = time.monotonic()
-                if 0 <= ctx.max_work_count <= work_count \
-                        or 0 <= ctx.max_err_count < err_count \
-                        or 0 <= ctx.max_cons_err_count < cons_err_count:
+                if (
+                    0 <= ctx.max_work_count <= work_count
+                    or 0 <= ctx.max_err_count < err_count
+                    or 0 <= ctx.max_cons_err_count < cons_err_count
+                ):
                     response.add_action(ACT_RESTART)
                     break
                 response_queue.put(response)
@@ -512,11 +520,8 @@ class _ThreadWorker:
 
     def start(self):
         if not self._exit:
-            raise RuntimeError(f'ThreadWorker {self._name} is already started')
-        self._thread = threading.Thread(
-            target=self.run,
-            daemon=self._daemon
-        )
+            raise RuntimeError(f"ThreadWorker {self._name} is already started")
+        self._thread = threading.Thread(target=self.run, daemon=self._daemon)
         self._thread.start()
         while self._exit:
             pass
@@ -530,30 +535,30 @@ class _ThreadWorker:
 
 
 def _process_worker(
-        name: Hashable,
-        work_queue: mp.Queue,
-        request_queue: mp.Queue,
-        response_queue: mp.Queue,
-        idle_flag: mp.Event,
-        idle_timeout: float,
-        wait_interval: float,
-        max_work_count: int,
-        max_err_count: int,
-        max_cons_err_count: int
+    name: Hashable,
+    work_queue: mp.Queue,
+    request_queue: mp.Queue,
+    response_queue: mp.Queue,
+    idle_flag: mp.Event,
+    idle_timeout: float,
+    wait_interval: float,
+    max_work_count: int,
+    max_err_count: int,
+    max_cons_err_count: int,
 ):
     worker_id = name
     work_id: Optional[Hashable] = None
 
     def get_response(
-            action: int = ACT_NONE,
-            result: Any = None,
-            exception: BaseException = None
+        action: int = ACT_NONE, result: Any = None, exception: BaseException = None
     ) -> _ActionItem:
-        return _ActionItem(action=action,
-                           work_id=work_id,
-                           worker_id=worker_id,
-                           result=result,
-                           exception=exception)
+        return _ActionItem(
+            action=action,
+            work_id=work_id,
+            worker_id=worker_id,
+            result=result,
+            exception=exception,
+        )
 
     work_count = 0
     err_count = 0
@@ -609,9 +614,11 @@ def _process_worker(
             work_id = None  # equals to exit_response_ctx
             del call_item
             idle_tick = time.monotonic()
-            if 0 <= max_work_count <= work_count \
-                    or 0 <= max_err_count < err_count \
-                    or 0 <= max_cons_err_count < cons_err_count:
+            if (
+                0 <= max_work_count <= work_count
+                or 0 <= max_err_count < err_count
+                or 0 <= max_cons_err_count < cons_err_count
+            ):
                 response.add_action(ACT_CLOSE)
                 idle_flag.clear()  # mark as busy when closing
                 break
@@ -623,17 +630,17 @@ def _process_worker(
 
 
 class _ProcessWorker:
-
     def __init__(self, ctx: _ProcessWorkerContext):
         self.ctx = ctx
         self._process: Optional[mp.Process] = None
 
-        # As there is a time interval between start() invoked and got first task from task queue,
-        # _ProcessWorker needs a flag to indicate it is still initializing and "idle", so as to prevent
-        # manager worker from creating redundant process workers.
-        # Also, there is a time interval between stop() invoked and worker deconstructed, _ProcessWorker
-        # needs a flag to tell manager worker when it is safe to omit deconstruction duration and create
-        # another worker
+        # As there is a time interval between start() invoked and got first task from
+        # task queue, _ProcessWorker needs a flag to indicate it is still initializing
+        # and "idle", so as to prevent manager worker from creating redundant process
+        # workers.
+        # Also, there is a time interval between stop() invoked and worker
+        # deconstructed, _ProcessWorker needs a flag to tell manager worker when it is
+        # safe to omit deconstruction duration and create another worker.
         self._idle = mp.Event()
         self._idle.set()
 
@@ -642,13 +649,14 @@ class _ProcessWorker:
         return self._process.sentinel if self._process else None
 
     def idle(self) -> bool:
-        # A ProcessWorker should be marked as idle while being constructed and busy while being deconstructed
+        # A ProcessWorker should be marked as idle while being constructed and busy
+        # while being deconstructed.
         return self._idle.is_set()
 
     def start(self):
         if self._process is not None:
             if self._process.is_alive():
-                raise RuntimeError(f'ProcessWorker {self.ctx.name} is already running')
+                raise RuntimeError(f"ProcessWorker {self.ctx.name} is already running")
             else:
                 self._process.close()
                 self._process = None
@@ -657,18 +665,18 @@ class _ProcessWorker:
         self._process = ctx.process_context.Process(
             target=_process_worker,
             kwargs={
-                'name': ctx.name,
-                'work_queue': ctx.work_queue,
-                'request_queue': ctx.request_queue,
-                'response_queue': ctx.response_queue,
-                'idle_flag': self._idle,
-                'idle_timeout': ctx.idle_timeout,
-                'wait_interval': ctx.wait_interval,
-                'max_work_count': ctx.max_work_count,
-                'max_err_count': ctx.max_err_count,
-                'max_cons_err_count': ctx.max_cons_err_count
+                "name": ctx.name,
+                "work_queue": ctx.work_queue,
+                "request_queue": ctx.request_queue,
+                "response_queue": ctx.response_queue,
+                "idle_flag": self._idle,
+                "idle_timeout": ctx.idle_timeout,
+                "wait_interval": ctx.wait_interval,
+                "max_work_count": ctx.max_work_count,
+                "max_err_count": ctx.max_err_count,
+                "max_cons_err_count": ctx.max_cons_err_count,
             },
-            daemon=ctx.daemon
+            daemon=ctx.daemon,
         )
         self._process.start()
 
@@ -683,61 +691,61 @@ class _ProcessWorker:
 
 
 def _worker_manager(
-        executor_ref: ReferenceType = None,
-        thread_workers: Dict[Hashable, _ThreadWorker] = None,
-        process_workers: Dict[Hashable, _ProcessWorker] = None,
-        async_workers: Dict[Hashable, _AsyncWorker] = None,
-        work_items: Dict[Hashable, _WorkItem] = None,
-        thread_work_queue: SimpleQueue = None,
-        thread_response_queue: SimpleQueue = None,
-        process_work_queue: mp.Queue = None,
-        process_response_queue: mp.Queue = None,
-        async_work_queue: SimpleQueue = None,
-        async_response_queue: SimpleQueue = None,
-        stop_event: threading.Event = None,
-        max_thread_workers: int = 4,
-        max_process_workers: int = 1,
-        max_async_workers: int = -1,
-        thread_worker_id_prefix: str = 'ThreadWorker-',
-        process_worker_id_prefix: str = 'ProcessWorker-',
-        async_worker_id_prefix: str = 'AsyncWorker-',
-        incremental_thread_pool: bool = True,
-        incremental_process_pool: bool = True,
-        enable_thread: bool = True,
-        enable_process: bool = True,
-        enable_async: bool = True,
-        wait_interval: float = 0.1,
-        max_thread_actions: int = 10,
-        max_process_actions: int = 10,
-        max_async_actions: int = 10
+    executor_ref: ReferenceType = None,
+    thread_workers: Dict[Hashable, _ThreadWorker] = None,
+    process_workers: Dict[Hashable, _ProcessWorker] = None,
+    async_workers: Dict[Hashable, _AsyncWorker] = None,
+    work_items: Dict[Hashable, _WorkItem] = None,
+    thread_work_queue: SimpleQueue = None,
+    thread_response_queue: SimpleQueue = None,
+    process_work_queue: mp.Queue = None,
+    process_response_queue: mp.Queue = None,
+    async_work_queue: SimpleQueue = None,
+    async_response_queue: SimpleQueue = None,
+    stop_event: threading.Event = None,
+    max_thread_workers: int = 4,
+    max_process_workers: int = 1,
+    max_async_workers: int = -1,
+    thread_worker_id_prefix: str = "ThreadWorker-",
+    process_worker_id_prefix: str = "ProcessWorker-",
+    async_worker_id_prefix: str = "AsyncWorker-",
+    incremental_thread_pool: bool = True,
+    incremental_process_pool: bool = True,
+    enable_thread: bool = True,
+    enable_process: bool = True,
+    enable_async: bool = True,
+    wait_interval: float = 0.1,
+    max_thread_actions: int = 10,
+    max_process_actions: int = 10,
+    max_async_actions: int = 10,
 ):
-    # TODO: Make max_thread_actions and max_process_actions more dynamic based on number of work/workers/cpu_count.
+    # TODO: Make max_thread_actions and max_process_actions more dynamic based on number
+    #       of work/workers/cpu_count.
 
     def chaos_error(*args, **kwargs):
         raise RuntimeError()
 
-    adjust_thread_workers \
-        = adjust_process_workers \
-        = adjust_async_worker \
-        = chaos_error
+    adjust_thread_workers = adjust_process_workers = adjust_async_worker = chaos_error
     global _global_shutdown
 
     def adjust_iterator(
-            workers: Dict[Hashable, Union[_ThreadWorker, _ProcessWorker]],
-            work_queue: Union[SimpleQueue, mp.Queue],
-            curr_workers: int,
-            max_workers: int
+        workers: Dict[Hashable, Union[_ThreadWorker, _ProcessWorker]],
+        work_queue: Union[SimpleQueue, mp.Queue],
+        curr_workers: int,
+        max_workers: int,
     ) -> range:
         idle_workers: int = sum(1 if w.idle() else 0 for w in workers.values())
         qsize = work_queue.qsize()
         if max_workers < 0:
             iterator = range(qsize - idle_workers)
         else:
-            iterator = range(curr_workers, min(max_workers, curr_workers + qsize - idle_workers))
+            iterator = range(
+                curr_workers, min(max_workers, curr_workers + qsize - idle_workers)
+            )
         return iterator
 
     if enable_async:
-        async_worker_id = f'{async_worker_id_prefix}0'
+        async_worker_id = f"{async_worker_id_prefix}0"
 
         def get_default_async_ctx(id_: Hashable):
             return _AsyncWorkerContext(
@@ -749,7 +757,7 @@ def _worker_manager(
                 idle_timeout=60.0,
                 wait_interval=0.1,
                 max_work_count=max_async_workers,
-                max_err_count=3
+                max_err_count=3,
             )
 
         def adjust_async_worker():
@@ -764,8 +772,10 @@ def _worker_manager(
         static_thread_pool: bool = False
 
         def get_next_thread_worker_id():
-            while (id_ := f'{thread_worker_id_prefix}{next_thread_worker_id()}') not in thread_workers:
-                return id_
+            while True:
+                id_ = f"{thread_worker_id_prefix}{next_thread_worker_id()}"
+                if id_ not in thread_workers:
+                    return id_
 
         def get_default_thread_ctx(id_: Hashable):
             return _ThreadWorkerContext(
@@ -778,7 +788,7 @@ def _worker_manager(
                 wait_interval=0.1,
                 max_work_count=12,
                 max_err_count=3,
-                max_cons_err_count=-1
+                max_cons_err_count=-1,
             )
 
         def adjust_thread_workers():
@@ -787,10 +797,9 @@ def _worker_manager(
             if static_thread_pool or curr_workers == max_thread_workers:
                 return
             if incremental_thread_pool or max_thread_workers < 0:
-                for _ in adjust_iterator(thread_workers,
-                                         thread_work_queue,
-                                         curr_workers,
-                                         max_thread_workers):
+                for _ in adjust_iterator(
+                    thread_workers, thread_work_queue, curr_workers, max_thread_workers
+                ):
                     id_ = get_next_thread_worker_id()
                     thread_worker = _ThreadWorker(get_default_thread_ctx(id_))
                     thread_workers[id_] = thread_worker
@@ -808,8 +817,10 @@ def _worker_manager(
         static_process_pool: bool = False
 
         def get_next_process_worker_id():
-            while (id_ := f'{process_worker_id_prefix}{next_process_worker_id()}') not in process_workers:
-                return id_
+            while True:
+                id_ = f"{process_worker_id_prefix}{next_process_worker_id()}"
+                if id_ not in process_workers:
+                    return id_
 
         mp_ctx = mp.get_context()
 
@@ -827,7 +838,7 @@ def _worker_manager(
                 # may be changed and differ from long-live process workers.
                 max_work_count=1,
                 max_err_count=-1,
-                max_cons_err_count=-1
+                max_cons_err_count=-1,
             )
 
         def adjust_process_workers():
@@ -836,10 +847,12 @@ def _worker_manager(
             if static_process_pool or curr_workers == max_process_workers:
                 return
             if incremental_process_pool or max_process_workers < 0:
-                for _ in adjust_iterator(process_workers,
-                                         process_work_queue,
-                                         curr_workers,
-                                         max_process_workers):
+                for _ in adjust_iterator(
+                    process_workers,
+                    process_work_queue,
+                    curr_workers,
+                    max_process_workers,
+                ):
                     id_ = get_next_process_worker_id()
                     process_worker = _ProcessWorker(get_default_process_ctx(id_))
                     process_workers[id_] = process_worker
@@ -853,17 +866,21 @@ def _worker_manager(
                 static_process_pool = True
 
     def consume_response(
-            response: _ActionItem,
-            workers: Dict[Hashable, Union[_ThreadWorker, _ProcessWorker, _AsyncWorker]]
+        response: _ActionItem,
+        workers: Dict[Hashable, Union[_ThreadWorker, _ProcessWorker, _AsyncWorker]],
     ):
         work_id = response.work_id
         worker_id = response.worker_id
         if response.match(ACT_DONE) or response.match(ACT_EXCEPTION):
-            work_item = work_items.pop(work_id)  # get and delete the work from worker_items
+            work_item = work_items.pop(
+                work_id
+            )  # get and delete the work from worker_items
             # Double check if future is cancelled
             if work_item.future.cancelled:
-                work_item.future.set_result(result=None,
-                                            exception=CancelledError(f'Future "{work_id}" has been cancelled'))
+                work_item.future.set_result(
+                    result=None,
+                    exception=CancelledError(f'Future "{work_id}" has been cancelled'),
+                )
             else:
                 work_item.future.set_result(response.result, response.exception)
         if response.match(ACT_CLOSE):
@@ -952,26 +969,26 @@ class HybridPoolExecutor:
     _next_process_worker_seq = itertools.count().__next__
 
     def __init__(
-            self,
-            thread_workers: int = 0,
-            process_workers: int = 0,
-            async_workers: int = 0,
-            incremental_thread_pool: bool = True,
-            incremental_process_pool: bool = True,
-            work_name_prefix: Hashable = 'Work-',
-            thread_worker_name_prefix: Hashable = 'ThreadWorker-',
-            process_worker_name_prefix: Hashable = 'ProcessWorker-',
-            async_worker_name_prefix: Hashable = 'AsyncWorker-',
-            redirect_thread: ThreadFallbackMode = None,
-            redirect_process: ProcessFallbackMode = None,
-            redirect_async: AsyncFallbackMode = None
+        self,
+        thread_workers: int = 0,
+        process_workers: int = 0,
+        async_workers: int = 0,
+        incremental_thread_pool: bool = True,
+        incremental_process_pool: bool = True,
+        work_name_prefix: Hashable = "Work-",
+        thread_worker_name_prefix: Hashable = "ThreadWorker-",
+        process_worker_name_prefix: Hashable = "ProcessWorker-",
+        async_worker_name_prefix: Hashable = "AsyncWorker-",
+        redirect_thread: ThreadFallbackMode = None,
+        redirect_process: ProcessFallbackMode = None,
+        redirect_async: AsyncFallbackMode = None,
     ):
         self._enable_thread = self._enable_process = self._enable_async = True
         self._mode_redirects = {
             WORK_MODE_THREAD: redirect_thread or WORK_MODE_THREAD,
             WORK_MODE_PROCESS: redirect_process or WORK_MODE_PROCESS,
             WORK_MODE_ASYNC: redirect_async or WORK_MODE_ASYNC,
-            WORK_MODE_LOCAL: WORK_MODE_LOCAL
+            WORK_MODE_LOCAL: WORK_MODE_LOCAL,
         }
         values = self._mode_redirects.values()
         if WORK_MODE_THREAD not in values:
@@ -982,8 +999,8 @@ class HybridPoolExecutor:
             self._enable_async = False
 
         # async
-        # Param max_async_workers is actually a logic value to control how many coroutines
-        # is running in one single AsyncWorker.
+        # Param max_async_workers is actually a logic value to control how many
+        # coroutines is running in one single AsyncWorker.
         if async_workers is None or async_workers <= 0:  # Unlimited
             self._max_async_workers = -1
         else:
@@ -1037,12 +1054,12 @@ class HybridPoolExecutor:
         self._stop_event: threading.Event = threading.Event()
 
     def submit(
-            self,
-            func: Callable[..., Any],
-            args: Tuple[Any, ...] = (),
-            kwargs: Dict[str, Any] = None,
-            name: Hashable = None,
-            mode: WorkMode = None
+        self,
+        func: Callable[..., Any],
+        args: Tuple[Any, ...] = (),
+        kwargs: Dict[str, Any] = None,
+        name: Hashable = None,
+        mode: WorkMode = None,
     ) -> PollFuture:
         if not mode:
             if asyncio.iscoroutinefunction(func):
@@ -1054,10 +1071,11 @@ class HybridPoolExecutor:
         if kwargs is None:
             kwargs = {}
         if name is None:
-            while (n := f'{self._work_name_prefix}{HybridPoolExecutor._next_work_seq()}') \
-                    not in self._work_items:
-                name = n
-                break
+            while True:
+                n = f"{self._work_name_prefix}{HybridPoolExecutor._next_work_seq()}"
+                if n not in self._work_items:
+                    name = n
+                    break
         elif name in self._work_items:
             raise KeyError(f'Work name "{name}" exists')
         _, future = self._gen_work_item_and_future(func, args, kwargs, name, mode)
@@ -1066,12 +1084,12 @@ class HybridPoolExecutor:
         return future
 
     def _gen_work_item_and_future(
-            self,
-            func: Callable[..., Any],
-            args: Tuple[Any, ...],
-            kwargs: Dict[str, Any],
-            name: Hashable,
-            mode: WorkMode
+        self,
+        func: Callable[..., Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        name: Hashable,
+        mode: WorkMode,
     ) -> Tuple[_WorkItem, PollFuture]:
         call_item = _CallItem(name, func, args, kwargs)
         future = PollFuture(name, call_item)
@@ -1080,14 +1098,20 @@ class HybridPoolExecutor:
         mode = self._mode_redirects[mode]
         is_async_func = asyncio.iscoroutinefunction(func)
         if is_async_func and mode not in (WORK_MODE_ASYNC, WORK_MODE_LOCAL):
-            warnings.warn(f'Work "{name}" ({func.__name__}) is an async function but set to be running under '
-                          f'"{mode}" mode, coercing to "async" mode instead.',
-                          RuntimeWarning, stacklevel=2)
+            warnings.warn(
+                f'Work "{name}" ({func.__name__}) is an async function but set to be '
+                f'running under "{mode}" mode, coercing to "async" mode instead.',
+                RuntimeWarning,
+                stacklevel=2,
+            )
             mode = WORK_MODE_ASYNC
         elif mode == WORK_MODE_ASYNC and not is_async_func:
-            warnings.warn(f'Work "{name}" ({func.__name__}) is an async function but set to be running under '
-                          '"async" mode, coercing to "thread" mode instead.',
-                          RuntimeWarning, stacklevel=2)
+            warnings.warn(
+                f'Work "{name}" ({func.__name__}) is an async function but set to be '
+                f'running under "async" mode, coercing to "thread" mode instead.',
+                RuntimeWarning,
+                stacklevel=2,
+            )
             mode = WORK_MODE_THREAD
         if mode == WORK_MODE_THREAD:
             self._thread_work_queue.put(call_item)
@@ -1106,11 +1130,14 @@ class HybridPoolExecutor:
         if future.cancelled:
             future.set_result(exception=CancelledError())
             return
-        # FIXME: RuntimeWarning: coroutine never awaited in 'async' mode due to set_async in notify_async_event
-        # This issue only occurs when mode='local' and is_coroutine == True
+        # FIXME: RuntimeWarning: coroutine never awaited in 'async' mode due to
+        #        set_async in notify_async_event
+        #        This issue only occurs when mode='local' and is_coroutine == True
         try:
             if asyncio.iscoroutinefunction(call_item.func):
-                result = asyncio.run(call_item.func(*call_item.args, **call_item.kwargs))
+                result = asyncio.run(
+                    call_item.func(*call_item.args, **call_item.kwargs)
+                )
             else:
                 result = call_item.func(*call_item.args, **call_item.kwargs)
             # Double check if future is cancelled
@@ -1123,6 +1150,7 @@ class HybridPoolExecutor:
 
     def _wakeup_worker_manager(self):
         if self._management_thread is None:
+
             def shutdown_cb(executor_ref: ReferenceType):
                 executor = executor_ref()
                 if executor:
@@ -1130,33 +1158,33 @@ class HybridPoolExecutor:
 
             self._management_thread = threading.Thread(
                 target=_worker_manager,
-                name='ThreadManager',
+                name="ThreadManager",
                 kwargs={
-                    'executor_ref': weakref.ref(self, shutdown_cb),
-                    'thread_workers': self._thread_workers,
-                    'process_workers': self._process_workers,
-                    'async_workers': self._async_workers,
-                    'work_items': self._work_items,
-                    'thread_work_queue': self._thread_work_queue,
-                    'thread_response_queue': self._thread_response_queue,
-                    'process_work_queue': self._process_work_queue,
-                    'process_response_queue': self._process_response_queue,
-                    'async_work_queue': self._async_work_queue,
-                    'async_response_queue': self._async_response_queue,
-                    'stop_event': self._stop_event,
-                    'max_thread_workers': self._max_thread_workers,
-                    'max_process_workers': self._max_process_workers,
-                    'max_async_workers': self._max_async_workers,
-                    'thread_worker_id_prefix': self._thread_worker_id_prefix,
-                    'process_worker_id_prefix': self._process_worker_id_prefix,
-                    'async_worker_id_prefix': self._async_worker_id_prefix,
-                    'incremental_thread_pool': self._incremental_thread_pool,
-                    'incremental_process_pool': self._incremental_process_pool,
-                    'enable_thread': self._enable_thread,
-                    'enable_process': self._enable_process,
-                    'enable_async': self._enable_async
+                    "executor_ref": weakref.ref(self, shutdown_cb),
+                    "thread_workers": self._thread_workers,
+                    "process_workers": self._process_workers,
+                    "async_workers": self._async_workers,
+                    "work_items": self._work_items,
+                    "thread_work_queue": self._thread_work_queue,
+                    "thread_response_queue": self._thread_response_queue,
+                    "process_work_queue": self._process_work_queue,
+                    "process_response_queue": self._process_response_queue,
+                    "async_work_queue": self._async_work_queue,
+                    "async_response_queue": self._async_response_queue,
+                    "stop_event": self._stop_event,
+                    "max_thread_workers": self._max_thread_workers,
+                    "max_process_workers": self._max_process_workers,
+                    "max_async_workers": self._max_async_workers,
+                    "thread_worker_id_prefix": self._thread_worker_id_prefix,
+                    "process_worker_id_prefix": self._process_worker_id_prefix,
+                    "async_worker_id_prefix": self._async_worker_id_prefix,
+                    "incremental_thread_pool": self._incremental_thread_pool,
+                    "incremental_process_pool": self._incremental_process_pool,
+                    "enable_thread": self._enable_thread,
+                    "enable_process": self._enable_process,
+                    "enable_async": self._enable_async,
                 },
-                daemon=True
+                daemon=True,
             )
             self._management_thread.start()
             _manager_threads.add(self._management_thread)
