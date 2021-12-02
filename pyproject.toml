@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+src_paths = ["hybrid_pool_executor", "tests"]
+
+# mock setting(s) of flake8 (in tox.ini currently)
+#[flake8]
+#max-line-length = 88

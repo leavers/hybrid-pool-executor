@@ -16,7 +16,9 @@ async def async_main():
     executor = HybridPoolExecutor()
     future1 = executor.submit(func1)
     future2 = executor.submit(func2)
-    return future1.get(), future2.get()
+    await future1
+    await future2
+    return future1.result, future2.result
 
 
 def test_run_in_async_pool():
