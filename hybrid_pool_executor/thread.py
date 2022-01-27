@@ -1,12 +1,13 @@
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from queue import SimpleQueue
 from threading import Thread
+from time import monotonic
 from typing import Any, Hashable, Optional
 from hybrid_pool_executor.typing import (
     ActionFlag,
     ACT_NONE,
+    ACT_CLOSE,
     WorkerMode,
     WORKER_MODE_THREAD,
 )
@@ -84,4 +85,9 @@ class ThreadWorker(BaseWorker):
 
         response: Optional[ThreadAction] = None
         self._running = True
-        idle_tick = time.monotonic()
+
+        idle_tick = monotonic()
+        while True:
+            if monotonic() - idle_tick > idle_timeout:
+                response = get_response(ACT_CLOSE)
+                break
