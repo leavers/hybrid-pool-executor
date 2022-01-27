@@ -1,46 +1,87 @@
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from hybrid_pool_executor.base import WorkerSpec
 from queue import SimpleQueue
 from threading import Thread
-from typing import Hashable, Optional
+from typing import Any, Hashable, Optional
+from hybrid_pool_executor.typing import (
+    ActionFlag,
+    ACT_NONE,
+    WorkerMode,
+    WORKER_MODE_THREAD,
+)
+from hybrid_pool_executor.base import (
+    BaseAction,
+    BaseAsyncFutureInterface,
+    BaseFuture,
+    BaseCall,
+    BaseWorkerSpec,
+    BaseWorker,
+)
 
 
 @dataclass
-class ThreadWorkerSpec(WorkerSpec):
+class ThreadWorkerSpec(BaseWorkerSpec):
     pass
 
 
-class ThreadWorker:
+@dataclass
+class ThreadAction(BaseAction):
+    worker_mode: WorkerMode = WORKER_MODE_THREAD
+
+
+@dataclass
+class ThreadCall(BaseCall):
+    worker_mode: WorkerMode = WORKER_MODE_THREAD
+
+
+class ThreadAsyncFutureInterface(BaseAsyncFutureInterface):
+    pass
+
+
+class ThreadFuture(BaseFuture):
+    pass
+
+
+class ThreadWorker(BaseWorker):
     def __init__(self, spec: ThreadWorkerSpec):
+        self.name = spec.name
         self.spec = spec
-        self.name: Hashable = self.spec.name
-        self.task_queue: SimpleQueue = self.spec.task_queue
-        self.request_queue: SimpleQueue = self.spec.request_queue
-        self.response_queue: SimpleQueue = self.spec.response_queue
-        self.daemon: bool = self.spec.daemon
-        self.idle_timeout: float = self.spec.idle_timeout
-        self.wait_interval: float = self.spec.wait_interval
-        self.max_task_count: int = self.spec.max_task_count
-        self.max_err_count: int = self.spec.max_err_count
-        self.max_cons_err_count: int = self.spec.max_cons_err_count
 
-        # whether worker is running
         self._running: bool = False
-        # whether worker is internal interrupted such as startup or shutdown
-        self._interrupted: bool = True
-        # whether worker is idle
         self._idle: bool = True
-
-        # id of task the worker is processing on
+        self._braking: bool = True
+        self._thread: Optional[Thread] = None
         self._task_id: Optional[Hashable] = None
-        # the thread of worker
-        self._thread: Optional[Hashable] = None
 
-    def _start_working_state(self, task_id: Hashable = None):
-        self._idle = False
-        self._task_id = task_id
+    def _get_response(
+        self,
+        flag: ActionFlag = ACT_NONE,
+        result: Optional[Any] = None,
+        exception: Optional[BaseException] = None,
+    ):
+        return ThreadAction(
+            flag=flag,
+            task_id=self._task_id,
+            worker_id=self.name,
+            result=result,
+            exception=exception,
+        )
 
-    def _stop_working_state(self):
-        self._idle = True
-        self._task_id = None
+    def run(self):
+        self._braking = False
+        ctx = self.ctx
+        get_response = self._get_response
+        task_bus: SimpleQueue = ctx.task_bus
+        request_bus: SimpleQueue = ctx.request_bus
+        response_bus: SimpleQueue = ctx.response_bus
+        idle_timeout: float = ctx.idle_timeout
+        wait_interval: float = ctx.wait_interval
 
+        tasks: int = 0
+        errors: int = 0
+        cons_errors: int = 0
+
+        response: Optional[ThreadAction] = None
+        self._running = True
+        idle_tick = time.monotonic()

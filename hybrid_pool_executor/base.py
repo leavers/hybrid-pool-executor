@@ -1,4 +1,5 @@
-from abc import ABC
+from abc import ABC, abstractmethod, abstractclassmethod
+from concurrent.futures._base import Executor
 from concurrent.futures._base import Future as _Future
 from dataclasses import dataclass, field
 from queue import SimpleQueue
@@ -18,10 +19,10 @@ dataclass and namedtuple.
 
 
 @dataclass
-class WorkerSpec(ABC):
+class BaseWorkerSpec(ABC):
     """The base dataclass of work specification.
 
-    WorkerSpec is regarded as a abstract class and should not be initialized directly.
+    BaseWorkerSpec is regarded as a abstract class and should not be initialized directly.
 
     :param name: Name of worker.
     :type name: Hashable
@@ -61,9 +62,9 @@ class WorkerSpec(ABC):
     """
 
     name: Hashable
-    task_queue: SimpleQueue
-    request_queue: SimpleQueue
-    response_queue: SimpleQueue
+    task_bus: SimpleQueue
+    request_bus: SimpleQueue
+    response_bus: SimpleQueue
     daemon: bool = True
     idle_timeout: float = 60.0
     wait_interval: float = 0.1
@@ -73,19 +74,19 @@ class WorkerSpec(ABC):
 
 
 @dataclass
-class Action(ABC):
+class BaseAction(ABC):
     """The base dataclass of action.
 
     Actions are objects used to transfer information between worker(s) and manager(s)
     through request/response queue.
 
-    Action is regarded as a abstract class and should not be initialized directly.
+    BaseAction is regarded as a abstract class and should not be initialized directly.
     """
 
     flag: ActionFlag = ACT_NONE
     message: Optional[str] = None
-    task_id: Hashable = None
-    worker_id: Hashable = None
+    task_id: Optional[Hashable] = None
+    worker_id: Optional[Hashable] = None
     worker_mode: WorkerMode = WORKER_MODE_THREAD
     result: Any = None
     exception: Optional[BaseException] = None
@@ -103,12 +104,12 @@ class Action(ABC):
 
 
 @dataclass
-class Call(ABC):
+class BaseCall(ABC):
     """The base dataclass of call item.
 
     Calls are objects used to carry functions to worker(s).
 
-    Call is regarded as a abstract class and should not be initialized directly.
+    BaseCall is regarded as a abstract class and should not be initialized directly.
     """
 
     name: Hashable
@@ -119,5 +120,78 @@ class Call(ABC):
     cancelled: bool = False
 
 
-class Future(_Future):
-    pass
+class BaseAsyncFutureInterface(ABC):
+    @abstractclassmethod
+    async def cancel(cls, *args, **kwargs) -> bool:
+        pass
+
+    @abstractclassmethod
+    async def result(cls, *args, **kwargs) -> bool:
+        pass
+
+    @abstractclassmethod
+    async def set_result(cls, *args, **kwargs):
+        pass
+
+    @abstractclassmethod
+    async def set_exception(cls, *args, **kwargs):
+        pass
+
+
+class BaseFuture(_Future, ABC):
+    @abstractmethod
+    def cancel(self) -> bool:
+        pass
+
+    @abstractmethod
+    def cancelled(self) -> bool:
+        pass
+
+    @abstractmethod
+    def running(self) -> bool:
+        pass
+
+    @abstractmethod
+    def done(self) -> bool:
+        pass
+
+    @abstractmethod
+    def add_done_callback(self, fn: Callable[["BaseFuture"], Any]):
+        pass
+
+    @abstractmethod
+    def result(self, timeout: Optional[float] = None):
+        pass
+
+    @abstractmethod
+    def set_running_or_notify_cancel(self):
+        pass
+
+    @abstractmethod
+    def set_result(self, result: Any):
+        pass
+
+    @abstractmethod
+    def set_exception(self, exception: Exception):
+        pass
+
+
+class BaseWorker(ABC):
+    @abstractmethod
+    def start(self):
+        pass
+
+    @abstractmethod
+    def run(self):
+        pass
+
+    @abstractmethod
+    def stop(self):
+        pass
+
+    @abstractmethod
+    def idle(self):
+        pass
+
+
+BaseExecutor = Executor
