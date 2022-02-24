@@ -1,4 +1,6 @@
-from typing import Literal
+from typing import Any, Callable, Coroutine, Literal, Union
+
+Function = Union[Callable[..., Any], Coroutine[Any, Any, Any]]
 
 WorkerMode = Literal["thread", "process", "async", "local"]
 ThreadFallbackMode = Literal["process", "local"]
