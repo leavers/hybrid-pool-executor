@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import itertools
 import dataclasses
@@ -9,7 +10,6 @@ from time import monotonic
 from typing import Any, cast, Callable, Dict, Optional, Tuple
 from hybrid_pool_executor.base import (
     Action,
-    ActionFlag,
     ACT_DONE,
     ACT_EXCEPTION,
     ACT_NONE,
@@ -22,27 +22,36 @@ from hybrid_pool_executor.base import (
     BaseWorker,
     BaseWorkerSpec,
     CancelledError,
-    Future,
     Function,
+    Future,
     ModuleSpec,
 )
 from hybrid_pool_executor.utils import coalesce, rectify, KillableThread
 
 
+NoneType = type(None)
+
+
 @dataclass
-class ThreadTask(BaseTask):
+class AsyncTask(BaseTask):
     future: Future = field(default_factory=Future)
 
 
 @dataclass
-class ThreadWorkerSpec(BaseWorkerSpec):
+class AsyncWorkerSpec(BaseWorkerSpec):
+    max_task_count: int = -1
+    max_err_count: int = 10
     daemon: bool = True
 
 
-class ThreadWorker(BaseWorker):
-    def __init__(self, spec: ThreadWorkerSpec):
+class AsyncWorker(BaseWorker):
+    def __init__(self, spec: AsyncWorkerSpec):
         self._spec = dataclasses.replace(spec)
         self._name = self._spec.name
+
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._async_tasks: Dict[str, asyncio.Task] = {}
+        self._current_tasks: Dict[str, AsyncTask] = {}
 
         # bare bool vairiable may not be synced when using start()
         self._state: Dict[str, bool] = {
@@ -58,25 +67,11 @@ class ThreadWorker(BaseWorker):
         return self._name
 
     @property
-    def spec(self) -> ThreadWorkerSpec:
+    def spec(self) -> AsyncWorkerSpec:
         return self._spec
 
     def is_alive(self) -> bool:
         return self._state["running"]
-
-    def _get_response(
-        self,
-        flag: ActionFlag = ACT_NONE,
-        result: Optional[Any] = None,
-        exception: Optional[BaseException] = None,
-    ):
-        return Action(
-            flag=flag,
-            task_name=self._current_task_name,
-            worker_name=self._name,
-            result=result,
-            exception=exception,
-        )
 
     def start(self):
         if self._state["running"] or self._thread is not None:
@@ -92,14 +87,14 @@ class ThreadWorker(BaseWorker):
         while not state["inited"]:
             pass
 
-    def _run(self):
+    async def _async_run(self):
         state = self._state
         state["running"] = True
         state["idle"] = True
         state["inited"] = True
 
         spec = self._spec
-        get_response = self._get_response
+        worker_name: str = self._name
         task_bus: SimpleQueue = spec.task_bus
         request_bus: SimpleQueue = spec.request_bus
         response_bus: SimpleQueue = spec.response_bus
@@ -109,17 +104,53 @@ class ThreadWorker(BaseWorker):
         idle_timeout: float = spec.idle_timeout
         wait_interval: float = spec.wait_interval
 
+        loop = cast(asyncio.BaseEventLoop, self._loop)
+        async_tasks = self._async_tasks
+        async_response_bus = asyncio.Queue()
+
+        async def coroutine(
+            task: AsyncTask,
+            worker_name: str,
+            bus: asyncio.Queue,
+        ):
+            result = resp = None
+            try:
+                task.fn = cast(Callable[..., Any], task.fn)
+                result = await task.fn(*task.args, **task.kwargs)
+            except Exception as exc:
+                resp = Action(
+                    flag=ACT_EXCEPTION,
+                    task_name=task.name,
+                    worker_name=worker_name,
+                )
+                task.future.set_exception(exc)
+            else:
+                resp = Action(
+                    flag=ACT_DONE,
+                    task_name=task.name,
+                    worker_name=worker_name,
+                )
+                task.future.set_result(result)
+            finally:
+                await bus.put(resp)
+
         task_count: int = 0
         err_count: int = 0
         cons_err_count: int = 0
+        current_coroutines: int = 0
+        is_prev_coro_err: bool = False
 
-        response: Optional[Action] = None
-
+        response = None
         idle_tick = monotonic()
         while True:
-            if monotonic() - idle_tick > idle_timeout:
-                response = get_response(ACT_CLOSE)
-                break
+            if current_coroutines > 0:
+                state["idle"] = False
+                idle_tick = monotonic()
+            else:
+                state["idle"] = True
+                if monotonic() - idle_tick > idle_timeout:
+                    response = Action(flag=ACT_CLOSE, worker_name=worker_name)
+                    break
             while not request_bus.empty():
                 request: Action = request_bus.get()
                 if request.match(ACT_RESET):
@@ -127,57 +158,86 @@ class ThreadWorker(BaseWorker):
                     err_count = 0
                     cons_err_count = 0
                 if request.match(ACT_CLOSE, ACT_RESTART):
-                    response = get_response(request.flag)
+                    response = Action(flag=request.flag, worker_name=worker_name)
                     break
             if not state["running"]:
                 break
-
             try:
-                task: ThreadTask = task_bus.get(timeout=wait_interval)
+                while not 0 <= max_task_count <= task_count:
+                    task: AsyncTask = task_bus.get(timeout=wait_interval)
+                    # check if future is cancelled
+                    if task.cancelled:
+                        task_bus.put(
+                            Action(
+                                flag=ACT_EXCEPTION,
+                                task_name=task.name,
+                                worker_name=worker_name,
+                                exception=CancelledError(
+                                    f'Future "{task.name}" has been cancelled'
+                                ),
+                            )
+                        )
+                        del task
+                        continue
+                    else:
+                        state["idle"] = False
+                        async_task: asyncio.Task = loop.create_task(
+                            coroutine(
+                                task=task,
+                                worker_name=worker_name,
+                                bus=async_response_bus,
+                            )
+                        )
+                        async_tasks[task.name] = async_task
+                        del task
+                    task_count += 1
+                    current_coroutines += 1
             except Empty:
-                continue
-            result = None
-            try:
-                state["idle"] = False
-                self._current_task_name = task.name
-
-                # check if order is cancelled
-                if task.cancelled:
-                    raise CancelledError(f'Future "{task.name}" has been cancelled')
-                task.fn = cast(Callable[..., Any], task.fn)
-                result = task.fn(*task.args, **task.kwargs)
-            except Exception as exc:
-                err_count += 1
-                cons_err_count += 1
-                task.future.set_exception(exc)
-                response = get_response(flag=ACT_EXCEPTION)
-            else:
-                cons_err_count = 0
-                task.future.set_result(result)
-                response = get_response(flag=ACT_DONE)
-            finally:
-                del task
-                task_count += 1
-
-                self._current_task_name = None
-                state["idle"] = True
-
-                idle_tick = monotonic()
+                pass
+            await asyncio.sleep(0)  # ugly but works
+            while not async_response_bus.empty():
+                response = await async_response_bus.get()
+                await async_tasks.pop(response.task_name)
+                current_coroutines -= 1
+                if response.match(ACT_EXCEPTION):
+                    err_count += 1
+                    if is_prev_coro_err:
+                        cons_err_count += 1
+                    else:
+                        cons_err_count = 1
+                    is_prev_coro_err = True
+                else:
+                    cons_err_count = 0
+                    is_prev_coro_err = False
                 if (
                     0 <= max_task_count <= task_count
                     or 0 <= max_err_count <= err_count
                     or 0 <= max_cons_err_count <= cons_err_count
                 ):
-                    response = cast(Action, response)
                     response.add_flag(ACT_RESTART)
+                    response_bus.put(response)
+                    state["running"] = False
                     break
                 response_bus.put(response)
                 response = None
-
-        state["idle"] = False
+            if not state["running"]:
+                break
         state["running"] = False
+        for async_task in async_tasks.values():
+            if not async_task.done():
+                await async_task
         if response is not None and response.flag != ACT_NONE:
+            if not response.match(ACT_CLOSE, ACT_RESTART):
+                response_bus.put(response)
+            else:
+                await async_response_bus.put(response)
+        while not async_response_bus.empty():
+            response = await async_response_bus.get()
             response_bus.put(response)
+
+    def _run(self):
+        self._loop = asyncio.new_event_loop()
+        self._loop.run_until_complete(self._async_run())
 
     def stop(self):
         self._state["running"] = False
@@ -200,22 +260,23 @@ class ThreadWorker(BaseWorker):
 
 
 @dataclass
-class ThreadManagerSpec(BaseManagerSpec):
-    mode: str = "thread"
-    name_pattern: str = "ThreadManager-{manager_seq}"
+class AsyncManagerSpec(BaseManagerSpec):
+    mode: str = "async"
+    num_workers: int = 1
+    name_pattern: str = "AsyncManager-{manager_seq}"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
-    worker_name_pattern: str = "ThreadWorker-{worker} [{manager}]"
-    task_name_pattern: str = "ThreadTask-{task} [{manager}]"
-    default_worker_spec: ThreadWorkerSpec = field(
-        default_factory=partial(ThreadWorkerSpec, name="DefaultWorkerSpec")
+    worker_name_pattern: str = "AsyncWorker-{worker} [{manager}]"
+    task_name_pattern: str = "AsyncTask-{task} [{manager}]"
+    default_worker_spec: AsyncWorkerSpec = field(
+        default_factory=partial(AsyncWorkerSpec, name="DefaultWorkerSpec")
     )
 
 
-class ThreadManager(BaseManager):
+class AsyncManager(BaseManager):
     _next_manager_seq = itertools.count().__next__
 
-    def __init__(self, spec: ThreadManagerSpec):
+    def __init__(self, spec: AsyncManagerSpec):
         self._spec = dataclasses.replace(spec)
         self._default_worker_spec = dataclasses.replace(spec.default_worker_spec)
         self._name = self._spec.name_pattern.format(
@@ -232,7 +293,7 @@ class ThreadManager(BaseManager):
 
         self._task_bus = SimpleQueue()
         self._response_bus = SimpleQueue()
-        self._current_workers: Dict[str, ThreadWorker] = {}
+        self._current_workers: Dict[str, AsyncWorker] = {}
         self._current_tasks: Dict[str, Any] = {}
         self._thread: Optional[KillableThread] = None
 
@@ -307,10 +368,10 @@ class ThreadManager(BaseManager):
         max_task_count: Optional[int] = None,
         max_err_count: Optional[int] = None,
         max_cons_err_count: Optional[int] = None,
-    ) -> ThreadWorkerSpec:
+    ) -> AsyncWorkerSpec:
         if name and name in self._current_tasks:
             raise KeyError(f'Worker "{name}" exists.')
-        worker_spec = ThreadWorkerSpec(
+        worker_spec = AsyncWorkerSpec(
             name=coalesce(
                 name,
                 self._spec.worker_name_pattern.format(
@@ -372,11 +433,13 @@ class ThreadManager(BaseManager):
                 f'Manager "{self._name}" is either stopped or not started yet '
                 "and not able to accept tasks."
             )
-        if inspect.iscoroutinefunction(fn) or inspect.iscoroutine(fn):
-            raise NotImplementedError("Coroutine function is not supported yet.")
+        if not inspect.iscoroutinefunction(fn) and not inspect.iscoroutine(fn):
+            raise NotImplementedError(
+                f'Param "fn" ({fn}) is neither a coroutine nor a coroutine function.'
+            )
         name = self._get_task_name(name)
         future = Future()
-        task = ThreadTask(
+        task = AsyncTask(
             name=name,
             fn=fn,
             args=args or (),
@@ -429,16 +492,16 @@ class ThreadManager(BaseManager):
             return
         # if more workers are needed, create them
         for _ in self._adjust_iterator():
-            worker = ThreadWorker(self.get_worker_spec())
+            worker = AsyncWorker(self.get_worker_spec())
             self._current_workers[worker._name] = worker
             worker.start()
 
 
 MODULE_SPEC = ModuleSpec(
-    name="thread",
-    manager_class=ThreadManager,
-    manager_spec_class=ThreadManagerSpec,
-    worker_class=ThreadWorker,
-    worker_spec_class=ThreadWorkerSpec,
+    name="async",
+    manager_class=AsyncManager,
+    manager_spec_class=AsyncManagerSpec,
+    worker_class=AsyncWorker,
+    worker_spec_class=AsyncWorkerSpec,
     enabled=True,
 )

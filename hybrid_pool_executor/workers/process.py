@@ -1,9 +1,11 @@
 import inspect
 import itertools
 import dataclasses
+import multiprocessing as mp
 from dataclasses import dataclass, field
 from functools import partial
-from queue import Empty, SimpleQueue
+from queue import Empty
+from multiprocessing import Process, Queue
 from threading import Event, ThreadError
 from time import monotonic
 from typing import Any, cast, Callable, Dict, Optional, Tuple
@@ -22,35 +24,37 @@ from hybrid_pool_executor.base import (
     BaseWorker,
     BaseWorkerSpec,
     CancelledError,
-    Future,
     Function,
+    Future,
     ModuleSpec,
 )
 from hybrid_pool_executor.utils import coalesce, rectify, KillableThread
 
 
 @dataclass
-class ThreadTask(BaseTask):
-    future: Future = field(default_factory=Future)
+class ProcessTask(BaseTask):
+    future: Optional[Future] = None
 
 
 @dataclass
-class ThreadWorkerSpec(BaseWorkerSpec):
-    daemon: bool = True
+class ProcessWorkerSpec(BaseWorkerSpec):
+    task_bus: Queue = field(default_factory=Queue)
+    request_bus: Queue = field(default_factory=Queue)
+    response_bus: Queue = field(default_factory=Queue)
+    max_task_count: int = 1
+    daemon: bool = False
 
 
-class ThreadWorker(BaseWorker):
-    def __init__(self, spec: ThreadWorkerSpec):
+class ProcessWorker(BaseWorker):
+    def __init__(self, spec: ProcessWorkerSpec):
         self._spec = dataclasses.replace(spec)
         self._name = self._spec.name
 
-        # bare bool vairiable may not be synced when using start()
-        self._state: Dict[str, bool] = {
-            "inited": False,
-            "running": False,
-            "idle": False,
-        }
-        self._thread: Optional[KillableThread] = None
+        self._inited = mp.Event()
+        self._running = mp.Event()
+        self._idle = mp.Event()
+
+        self._process: Optional[Process] = None
         self._current_task_name: Optional[str] = None
 
     @property
@@ -58,51 +62,63 @@ class ThreadWorker(BaseWorker):
         return self._name
 
     @property
-    def spec(self) -> ThreadWorkerSpec:
+    def spec(self) -> ProcessWorkerSpec:
         return self._spec
 
     def is_alive(self) -> bool:
-        return self._state["running"]
-
-    def _get_response(
-        self,
-        flag: ActionFlag = ACT_NONE,
-        result: Optional[Any] = None,
-        exception: Optional[BaseException] = None,
-    ):
-        return Action(
-            flag=flag,
-            task_name=self._current_task_name,
-            worker_name=self._name,
-            result=result,
-            exception=exception,
-        )
+        return self._running.is_set()
 
     def start(self):
-        if self._state["running"] or self._thread is not None:
+        if self._running.is_set() or self._process is not None:
             raise RuntimeError(
                 f'{self.__class__.__qualname__} "{self._name}" is already started.'
             )
-        self._thread = KillableThread(target=self._run, daemon=self._spec.daemon)
-        self._thread.start()
+        self._process = Process(
+            target=self._run,
+            name=self._name,
+            kwargs={
+                "spec": self._spec,
+                "inited": self._inited,
+                "idle": self._idle,
+                "running": self._running,
+            },
+            daemon=self._spec.daemon,
+        )
+        self._process.start()
 
-        # Block method until self._run actually starts to avoid creating multiple
-        # workers when in high concurrency situation.
-        state = self._state
-        while not state["inited"]:
+        while not self._running.is_set():
             pass
 
-    def _run(self):
-        state = self._state
-        state["running"] = True
-        state["idle"] = True
-        state["inited"] = True
+    @staticmethod
+    def _run(
+        spec: ProcessWorkerSpec,
+        inited: Event,
+        idle: Event,
+        running: Event,
+    ):
+        inited.set()
+        idle.set()
+        running.set()
 
-        spec = self._spec
-        get_response = self._get_response
-        task_bus: SimpleQueue = spec.task_bus
-        request_bus: SimpleQueue = spec.request_bus
-        response_bus: SimpleQueue = spec.response_bus
+        worker_name = spec.name
+        current_task_name: Optional[str] = None
+
+        def get_response(
+            flag: ActionFlag = ACT_NONE,
+            result: Optional[Any] = None,
+            exception: Optional[BaseException] = None,
+        ) -> Action:
+            return Action(
+                flag=flag,
+                task_name=current_task_name,
+                worker_name=worker_name,
+                result=result,
+                exception=exception,
+            )
+
+        task_bus: Queue = spec.task_bus
+        request_bus: Queue = spec.request_bus
+        response_bus: Queue = spec.response_bus
         max_task_count: int = spec.max_task_count
         max_err_count: int = spec.max_err_count
         max_cons_err_count: int = spec.max_cons_err_count
@@ -114,7 +130,7 @@ class ThreadWorker(BaseWorker):
         cons_err_count: int = 0
 
         response: Optional[Action] = None
-
+        should_exit: bool = False
         idle_tick = monotonic()
         while True:
             if monotonic() - idle_tick > idle_timeout:
@@ -128,20 +144,20 @@ class ThreadWorker(BaseWorker):
                     cons_err_count = 0
                 if request.match(ACT_CLOSE, ACT_RESTART):
                     response = get_response(request.flag)
+                    should_exit = True
                     break
-            if not state["running"]:
+            if should_exit or not running.is_set():
                 break
-
             try:
-                task: ThreadTask = task_bus.get(timeout=wait_interval)
+                task: ProcessTask = task_bus.get(timeout=wait_interval)
             except Empty:
                 continue
             result = None
             try:
-                state["idle"] = False
-                self._current_task_name = task.name
+                idle.clear()
+                current_task_name = task.name
 
-                # check if order is cancelled
+                # check if future is cancelled
                 if task.cancelled:
                     raise CancelledError(f'Future "{task.name}" has been cancelled')
                 task.fn = cast(Callable[..., Any], task.fn)
@@ -149,18 +165,16 @@ class ThreadWorker(BaseWorker):
             except Exception as exc:
                 err_count += 1
                 cons_err_count += 1
-                task.future.set_exception(exc)
-                response = get_response(flag=ACT_EXCEPTION)
+                response = get_response(flag=ACT_EXCEPTION, exception=exc)
             else:
                 cons_err_count = 0
-                task.future.set_result(result)
-                response = get_response(flag=ACT_DONE)
+                response = get_response(flag=ACT_DONE, result=result)
             finally:
                 del task
                 task_count += 1
 
-                self._current_task_name = None
-                state["idle"] = True
+                current_task_name = None
+                idle.set()
 
                 idle_tick = monotonic()
                 if (
@@ -174,50 +188,47 @@ class ThreadWorker(BaseWorker):
                 response_bus.put(response)
                 response = None
 
-        state["idle"] = False
-        state["running"] = False
+        idle.clear()
+        running.clear()
         if response is not None and response.flag != ACT_NONE:
             response_bus.put(response)
 
     def stop(self):
-        self._state["running"] = False
-        if self._thread and self._thread.is_alive():
-            self._thread.join()
-        self._thread = None
+        self._running.clear()
+        if self._process and self._process.is_alive():
+            self._process.join()
+        self._process = None
 
     def terminate(self):
-        self._state["running"] = False
-        try:
-            if self._thread and self._thread.is_alive():
-                self._thread.terminate()
-        except ThreadError:
-            pass
-        self._thread = None
+        self._running.clear()
+        if self._process and self._process.is_alive():
+            self._process.terminate()
+        self._process = None
 
     def is_idle(self) -> bool:
-        state = self._state
-        return state["idle"] if state["running"] else False
+        return self._idle.is_set()
 
 
 @dataclass
-class ThreadManagerSpec(BaseManagerSpec):
-    mode: str = "thread"
-    name_pattern: str = "ThreadManager-{manager_seq}"
+class ProcessManagerSpec(BaseManagerSpec):
+    mode: str = "process"
+    name_pattern: str = "ProcessManager-{manager_seq}"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
-    worker_name_pattern: str = "ThreadWorker-{worker} [{manager}]"
-    task_name_pattern: str = "ThreadTask-{task} [{manager}]"
-    default_worker_spec: ThreadWorkerSpec = field(
-        default_factory=partial(ThreadWorkerSpec, name="DefaultWorkerSpec")
+    worker_name_pattern: str = "ProcessWorker-{worker} [{manager}]"
+    task_name_pattern: str = "ProcessTask-{task} [{manager}]"
+    default_worker_spec: ProcessWorkerSpec = field(
+        default_factory=partial(ProcessWorkerSpec, name="DefaultWorkerSpec")
     )
 
 
-class ThreadManager(BaseManager):
+class ProcessManager(BaseManager):
     _next_manager_seq = itertools.count().__next__
 
-    def __init__(self, spec: ThreadManagerSpec):
+    def __init__(self, spec: ProcessManagerSpec):
         self._spec = dataclasses.replace(spec)
         self._default_worker_spec = dataclasses.replace(spec.default_worker_spec)
+
         self._name = self._spec.name_pattern.format(
             manager_seq=self._next_manager_seq()
         )
@@ -230,9 +241,9 @@ class ThreadManager(BaseManager):
             "running": False,
         }
 
-        self._task_bus = SimpleQueue()
-        self._response_bus = SimpleQueue()
-        self._current_workers: Dict[str, ThreadWorker] = {}
+        self._task_bus = Queue()
+        self._response_bus = Queue()
+        self._current_workers: Dict[str, ProcessWorker] = {}
         self._current_tasks: Dict[str, Any] = {}
         self._thread: Optional[KillableThread] = None
 
@@ -307,10 +318,10 @@ class ThreadManager(BaseManager):
         max_task_count: Optional[int] = None,
         max_err_count: Optional[int] = None,
         max_cons_err_count: Optional[int] = None,
-    ) -> ThreadWorkerSpec:
+    ) -> ProcessWorkerSpec:
         if name and name in self._current_tasks:
             raise KeyError(f'Worker "{name}" exists.')
-        worker_spec = ThreadWorkerSpec(
+        worker_spec = ProcessWorkerSpec(
             name=coalesce(
                 name,
                 self._spec.worker_name_pattern.format(
@@ -319,7 +330,7 @@ class ThreadManager(BaseManager):
                 ),
             ),
             task_bus=self._task_bus,
-            request_bus=SimpleQueue(),
+            request_bus=Queue(),
             response_bus=self._response_bus,
             daemon=coalesce(daemon, self._default_worker_spec.daemon),
             idle_timeout=rectify(
@@ -376,7 +387,7 @@ class ThreadManager(BaseManager):
             raise NotImplementedError("Coroutine function is not supported yet.")
         name = self._get_task_name(name)
         future = Future()
-        task = ThreadTask(
+        task = ProcessTask(
             name=name,
             fn=fn,
             args=args or (),
@@ -384,7 +395,8 @@ class ThreadManager(BaseManager):
             future=future,
         )
         self._current_tasks[name] = task
-        self._task_bus.put(task)
+        # exclude future when sending to other process to reduce size
+        self._task_bus.put(dataclasses.replace(task, future=None))
         self._adjust_workers()
         return future
 
@@ -393,7 +405,12 @@ class ThreadManager(BaseManager):
         response.task_name = cast(str, response.task_name)
         response.worker_name = cast(str, response.worker_name)
         if response.match(ACT_DONE, ACT_EXCEPTION):
-            self._current_tasks.pop(response.task_name)
+            task: ProcessTask = self._current_tasks.pop(response.task_name)
+            task.future = cast(Future, task.future)
+            if response.match(ACT_DONE):
+                task.future.set_result(response.result)
+            else:
+                task.future.set_exception(response.exception)
         if response.match(ACT_CLOSE):
             self._current_workers.pop(response.worker_name)
         elif response.match(ACT_RESTART):
@@ -429,16 +446,16 @@ class ThreadManager(BaseManager):
             return
         # if more workers are needed, create them
         for _ in self._adjust_iterator():
-            worker = ThreadWorker(self.get_worker_spec())
+            worker = ProcessWorker(self.get_worker_spec())
             self._current_workers[worker._name] = worker
             worker.start()
 
 
 MODULE_SPEC = ModuleSpec(
-    name="thread",
-    manager_class=ThreadManager,
-    manager_spec_class=ThreadManagerSpec,
-    worker_class=ThreadWorker,
-    worker_spec_class=ThreadWorkerSpec,
+    name="process",
+    manager_class=ProcessManager,
+    manager_spec_class=ProcessManagerSpec,
+    worker_class=ProcessWorker,
+    worker_spec_class=ProcessWorkerSpec,
     enabled=True,
 )
