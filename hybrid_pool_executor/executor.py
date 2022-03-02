@@ -19,7 +19,8 @@ _all_executors = weakref.WeakSet()
 @atexit.register
 def _python_exit():
     for executor in _all_executors:
-        executor.shutdown()
+        if executor.is_alive():
+            executor.shutdown()
 
 
 @lru_cache(maxsize=1)
@@ -77,6 +78,7 @@ class HybridPoolExecutor(BaseExecutor):
                 )
         global _all_executors
         _all_executors.add(self)
+        self._is_alive: bool = True
 
     @classmethod
     def _get_manager(
@@ -111,6 +113,7 @@ class HybridPoolExecutor(BaseExecutor):
             mode = "async" if inspect.iscoroutinefunction(fn) else "thread"
         if mode not in self._module_specs:
             raise NotImplementedError(f'Mode "{mode}" is not supported.')
+        self._is_alive = True
         if mode not in self._managers:
             module_spec: ModuleSpec = self._module_specs[mode]
             manager = self._get_manager(
@@ -123,9 +126,13 @@ class HybridPoolExecutor(BaseExecutor):
         manager: BaseManager = self._managers[mode]
         return manager.submit(fn=fn, args=args, kwargs=kwargs, name=name)
 
+    def is_alive(self) -> bool:
+        return self._is_alive
+
     def shutdown(self, wait: bool = True, *, cancel_futures: bool = False):
         for manager in self._managers.values():
             if wait:
                 manager.stop()
             else:
                 manager.terminate()
+        self._is_alive = False
