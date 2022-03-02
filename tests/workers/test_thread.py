@@ -1,5 +1,7 @@
 import pytest
+import time
 import weakref
+from random import random
 from hybrid_pool_executor.base import (
     ACT_EXCEPTION,
     ACT_RESTART,
@@ -146,3 +148,17 @@ def test_thread_manager():
     assert future.result() == "done"
 
     manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_thread_manager_high_concurrency():
+    def simple_task(v):
+        time.sleep(random())
+        return v
+
+    with ThreadManager(ThreadManagerSpec()) as manager:
+        futures = []
+        for i in range(1024):
+            futures.append(manager.submit(simple_task, (i,)))
+        for i, future in enumerate(futures):
+            assert await future == i

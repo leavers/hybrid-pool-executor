@@ -1,4 +1,7 @@
+import pytest
+import time
 import weakref
+from random import random
 from hybrid_pool_executor.base import (
     ACT_EXCEPTION,
     ACT_RESTART,
@@ -19,6 +22,11 @@ def simple_task():
 
 def simple_error_task():
     raise RuntimeError("error")
+
+
+def simple_task_v(v):
+    time.sleep(random())
+    return v
 
 
 def test_process_worker_task():
@@ -82,5 +90,11 @@ def test_process_manager():
     manager.stop()
 
 
-if __name__ == "__main__":
-    test_process_manager()
+@pytest.mark.asyncio
+async def test_process_manager_high_concurrency():
+    with ProcessManager(ProcessManagerSpec()) as manager:
+        futures = []
+        for i in range(32):
+            futures.append(manager.submit(simple_task_v, (i,)))
+        for i, future in enumerate(futures):
+            assert await future == i

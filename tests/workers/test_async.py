@@ -1,6 +1,8 @@
+import asyncio
 import time
 import pytest
 import weakref
+from random import random
 from hybrid_pool_executor.base import (
     ACT_EXCEPTION,
     ACT_RESTART,
@@ -56,12 +58,12 @@ async def test_async_worker_task_async_future():
     worker.stop()
 
 
-def test_thread_worker_error():
+def test_async_worker_error():
     async def simple_error_task():
         raise RuntimeError("error")
 
     worker_spec = AsyncWorkerSpec(
-        name="TestThreadWorker",
+        name="TestAsyncWorker",
         idle_timeout=1,
         max_err_count=1,
     )
@@ -87,7 +89,7 @@ def test_thread_worker_error():
     assert ref() is None
 
 
-def test_thread_worker_max_error():
+def test_async_worker_max_error():
     async def simple_task():
         return "done"
 
@@ -95,7 +97,7 @@ def test_thread_worker_max_error():
         raise RuntimeError("error")
 
     worker_spec = AsyncWorkerSpec(
-        name="TestThreadWorker",
+        name="TestAsyncWorker",
         idle_timeout=1,
         max_err_count=2,
         max_cons_err_count=-1,
@@ -127,12 +129,12 @@ def test_thread_worker_max_error():
     assert not worker.is_alive()
 
 
-def test_thread_worker_cons_error():
+def test_async_worker_cons_error():
     async def simple_error_task():
         raise RuntimeError("error")
 
     worker_spec = AsyncWorkerSpec(
-        name="TestThreadWorker",
+        name="TestAsyncWorker",
         idle_timeout=1,
         max_err_count=-1,
         max_cons_err_count=2,
@@ -158,7 +160,7 @@ def test_thread_worker_cons_error():
     assert not worker.is_alive()
 
 
-def test_thread_manager():
+def test_async_manager():
     async def simple_task():
         return "done"
 
@@ -170,3 +172,17 @@ def test_thread_manager():
     assert future.result() == "done"
 
     manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_async_manager_high_concurrency():
+    async def simple_task(v):
+        await asyncio.sleep(random())
+        return v
+
+    with AsyncManager(AsyncManagerSpec()) as manager:
+        futures = []
+        for i in range(1024):
+            futures.append(manager.submit(simple_task, (i,)))
+        for i, future in enumerate(futures):
+            assert await future == i
