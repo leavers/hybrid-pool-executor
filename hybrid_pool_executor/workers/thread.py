@@ -259,6 +259,7 @@ class ThreadManager(BaseManager):
         num_process_limit: int = rectify(
             coalesce(self._spec.max_processing_responses_per_iteration, -1), -1
         )
+        consume_response = self._consume_response
         response_bus = self._response_bus
         while True:
             if not state["running"]:
@@ -266,14 +267,14 @@ class ThreadManager(BaseManager):
 
             num_processed: int = 0
             while not response_bus.empty():
-                self._consume_response()
+                consume_response()
                 num_processed += 1
                 if num_processed >= num_process_limit:
                     break
             if num_processed == 0:
                 metronome.wait(wait_interval)
         while not response_bus.empty():
-            self._consume_response()
+            consume_response()
         self._stop_all_workers()
 
     def _stop_all_workers(self):

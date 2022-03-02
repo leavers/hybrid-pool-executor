@@ -180,8 +180,8 @@ class BaseWorker(ABC):
 
 
 class Future(_Future):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self):
+        super().__init__()
         self._got: bool = False
 
         def cb(_):
@@ -191,7 +191,7 @@ class Future(_Future):
 
     async def _async_result(self):
         while not self._got:
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.001)
         return self.result()
 
     def __await__(self):
@@ -244,6 +244,7 @@ class BaseManager(ABC):
         pass
 
     def __enter__(self):
+        self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
