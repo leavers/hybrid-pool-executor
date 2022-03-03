@@ -5,37 +5,9 @@ from concurrent.futures._base import Executor
 from concurrent.futures._base import Future as _Future
 from dataclasses import dataclass, field
 from queue import SimpleQueue
-from typing import (
-    cast,
-    Any,
-    Callable,
-    Coroutine,
-    Dict,
-    Literal,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-)
+from typing import Any, Dict, FrozenSet, Literal, Optional, Tuple, Type, Union, cast
 
-Function = Union[Callable[..., Any], Coroutine[Any, Any, Any]]
-
-ERROR_MODE_RAISE = "raise"
-ERROR_MODE_IGNORE = "ignore"
-ERROR_MODE_COERCE = "coerce"
-ERROR_MODES = (ERROR_MODE_RAISE, ERROR_MODE_IGNORE, ERROR_MODE_COERCE)
-
-ActionFlag = int
-ACT_NONE = 0
-ACT_DONE = 1
-ACT_CLOSE = 1 << 1
-ACT_EXCEPTION = 1 << 2
-ACT_RESTART = 1 << 3
-ACT_RESET = 1 << 4
-ACT_TIMEOUT = 1 << 5
-ACT_CANCEL = 1 << 6
-ACT_COERCE = 1 << 7
-
+from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
 
 """
 For python 3.7+, there is no significant speed/size difference between object,
@@ -74,16 +46,8 @@ class Action:
         if len(flags) == 1 and isinstance(flags[0], (tuple, list, set)):
             flags = flags[0]
         flags = cast(Tuple[ActionFlag, ...], flags)
-        if strategy == "any":
-            for flag in flags:
-                if self.flag & flag:
-                    return True
-            return False
-        else:
-            for flag in flags:
-                if not self.flag & flag:
-                    return False
-            return True
+        m = map(lambda flag: self.flag & flag, flags)
+        return any(m) if strategy == "any" else all(m)
 
 
 @dataclass
@@ -258,4 +222,5 @@ class ModuleSpec:
     manager_spec_class: Type[BaseManagerSpec]
     worker_class: Type[BaseWorker]
     worker_spec_class: Type[BaseWorkerSpec]
+    tags: FrozenSet[str]
     enabled: bool = True

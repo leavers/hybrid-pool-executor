@@ -1,21 +1,15 @@
+import dataclasses
 import inspect
 import itertools
-import dataclasses
 from dataclasses import dataclass, field
 from functools import partial
 from queue import Empty, SimpleQueue
 from threading import Event, ThreadError
 from time import monotonic
-from typing import Any, cast, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, cast
+
 from hybrid_pool_executor.base import (
     Action,
-    ActionFlag,
-    ACT_DONE,
-    ACT_EXCEPTION,
-    ACT_NONE,
-    ACT_CLOSE,
-    ACT_RESET,
-    ACT_RESTART,
     BaseManager,
     BaseManagerSpec,
     BaseTask,
@@ -23,10 +17,19 @@ from hybrid_pool_executor.base import (
     BaseWorkerSpec,
     CancelledError,
     Future,
-    Function,
     ModuleSpec,
 )
-from hybrid_pool_executor.utils import coalesce, rectify, KillableThread
+from hybrid_pool_executor.constants import (
+    ACT_CLOSE,
+    ACT_DONE,
+    ACT_EXCEPTION,
+    ACT_NONE,
+    ACT_RESET,
+    ACT_RESTART,
+    ActionFlag,
+    Function,
+)
+from hybrid_pool_executor.utils import KillableThread, coalesce, rectify
 
 
 @dataclass
@@ -441,5 +444,6 @@ MODULE_SPEC = ModuleSpec(
     manager_spec_class=ThreadManagerSpec,
     worker_class=ThreadWorker,
     worker_spec_class=ThreadWorkerSpec,
+    tags=frozenset({"process", "thread"}),
     enabled=True,
 )

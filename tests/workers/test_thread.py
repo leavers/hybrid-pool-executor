@@ -1,11 +1,10 @@
-import pytest
 import time
 import weakref
 from random import random
-from hybrid_pool_executor.base import (
-    ACT_EXCEPTION,
-    ACT_RESTART,
-)
+
+import pytest
+
+from hybrid_pool_executor.constants import ACT_EXCEPTION, ACT_RESTART
 from hybrid_pool_executor.workers.thread import (
     Action,
     ThreadManager,

@@ -1,7 +1,9 @@
 import asyncio
-import pytest
 import time
 from random import random
+
+import pytest
+
 from hybrid_pool_executor import HybridPoolExecutor
 
 

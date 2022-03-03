@@ -1,3 +1,4 @@
+import asyncio
 import ctypes
 import functools
 import inspect
@@ -46,10 +47,33 @@ def _(*args, **kwargs):
     raise TypeError('Param "val" should not be None.')
 
 
+class AsyncToSync:
+    def __init__(self, fn, /, *args, **kwargs):
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.is_coro = inspect.iscoroutine(self.fn)
+        self.is_async = inspect.iscoroutinefunction(self.fn)
+
+    def __call__(self, loop=None):
+        if not self.is_coro and not self.is_async:
+            return self.fn(*self.args, **self.kwargs)
+        if self.is_async:
+            self.fn = self.fn(*self.args, **self.kwargs)
+        if not loop:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        if loop.is_running():
+            raise RuntimeError("Unable to execute when loop is already running.")
+        return loop.run_until_complete(self.fn)
+
+
 class KillableThread(Thread):
     @staticmethod
     def _raise_to_kill(tid, exctype):
-        """Raises the exception, performs cleanup if needed."""
         if not inspect.isclass(exctype):
             raise TypeError("Only types can be raised (not instances)")
         res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(exctype))
@@ -62,10 +86,7 @@ class KillableThread(Thread):
             raise SystemError("PyThreadState_SetAsyncExc failed.")
 
     def raise_exc(self, exctype):
-        """raises the given exception type in the context of this thread"""
         self._raise_to_kill(self.ident, exctype)
 
     def terminate(self):
-        """raises SystemExit in the context of the given thread, which should
-        cause the thread to exit silently (unless caught)"""
         self.raise_exc(SystemExit)

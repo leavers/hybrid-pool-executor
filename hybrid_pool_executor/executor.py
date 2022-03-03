@@ -1,14 +1,15 @@
 import atexit
-import os
 import importlib
 import inspect
+import os
 import weakref
 from functools import lru_cache
-from typing import Any, cast, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, cast
+
 from hybrid_pool_executor.base import (
     BaseExecutor,
-    BaseManagerSpec,
     BaseManager,
+    BaseManagerSpec,
     Future,
     ModuleSpec,
 )

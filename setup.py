@@ -12,9 +12,7 @@ def get_version():
     return __import__(project).__version__
 
 
-install_requires = [
-    "dataclasses; python_version~='3.6.0'"
-]
+install_requires = ["dataclasses; python_version~='3.6.0'"]
 tests_require = [
     "pytest>=6.2.5",
     "pytest-asyncio",
