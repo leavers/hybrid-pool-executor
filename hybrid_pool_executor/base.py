@@ -155,7 +155,7 @@ class Future(_Future):
 
     async def _async_result(self):
         while not self._got:
-            await asyncio.sleep(0.001)
+            await asyncio.sleep(0.01)
         return self.result()
 
     def __await__(self):
