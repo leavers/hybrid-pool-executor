@@ -12,7 +12,7 @@ def get_version():
     return __import__(project).__version__
 
 
-install_requires = ["dataclasses; python_version~='3.6.0'"]
+install_requires = []
 tests_require = [
     "black",
     "coverage>=5.3",
@@ -36,7 +36,7 @@ setup_kwargs = dict(
     version=get_version(),
     platforms="any",
     license="MIT",
-    python_requires=">=3.6",
+    python_requires=">=3.8",
     description="Pool executor supporting thread, process and async.",
     long_description=get_readme(),
     long_description_content_type="text/x-rst",
@@ -52,10 +52,9 @@ setup_kwargs = dict(
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
         "Natural Language :: English",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
