@@ -35,7 +35,7 @@ Example:
     def test_run():
         pool = HybridPoolExecutor()
         future1 = pool.submit(func1)  # run in a thread
-        future2 = pool.submit(func2, mode='process')  # run in a process
+        future2 = pool.submit(func2, _mode='process')  # run in a process
         future3 = pool.submit(func3)  # run as a coroutine
 
 
