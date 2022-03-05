@@ -21,12 +21,51 @@ async def simple_async_delay_task(v):
     return v
 
 
+@pytest.mark.timeout(10)
 def test_executor_simple():
     pool = HybridPoolExecutor()
     future = pool.submit(simple_task)
     assert future.result() == "done"
 
 
+@pytest.mark.timeout(10)
+def test_executor_map():
+    pool = HybridPoolExecutor()
+    results = pool.map(simple_delay_task, range(4))
+    for i, result in enumerate(results):
+        assert result == i
+
+
+@pytest.mark.timeout(10)
+def test_executor_map_tasks():
+    pool = HybridPoolExecutor()
+    results = pool.map(simple_delay_task, [(i, i) for i in range(4)])
+    for i, result in enumerate(results):
+        assert result == (i, i)
+
+
+def test_executor_guess_mode():
+    pool = HybridPoolExecutor()
+    guess_mode = pool._guess_mode
+
+    assert "thread" in guess_mode(simple_delay_task)
+    assert "async" in guess_mode(simple_async_delay_task)
+    assert guess_mode(simple_async_delay_task, mode="async") == {"async"}
+    assert guess_mode(simple_delay_task, mode="thread") == {"thread"}
+    assert guess_mode(simple_delay_task, mode="process") == {"process"}
+    assert len(guess_mode(simple_delay_task, mode="async")) == 0
+
+    assert "thread" in guess_mode(simple_async_delay_task, tags=["thread"])
+    assert "process" in guess_mode(simple_async_delay_task, tags=["thread"])
+    assert "thread" in guess_mode(simple_delay_task, tags=["thread"])
+    assert "process" in guess_mode(simple_delay_task, tags=["thread"])
+    assert "thread" not in guess_mode(simple_delay_task, tags=["process"])
+    assert "process" in guess_mode(simple_delay_task, tags=["process"])
+
+    assert len(guess_mode(simple_delay_task, tags=["black hole"])) == 0
+
+
+@pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_executor_high_concurrency():
     futures = {
@@ -55,6 +94,7 @@ async def test_executor_high_concurrency():
         assert await futures["async"][i] == i
 
 
+@pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_executor_run_in_executor():
     pool = HybridPoolExecutor()

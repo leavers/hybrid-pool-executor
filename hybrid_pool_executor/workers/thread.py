@@ -1,12 +1,11 @@
 import dataclasses
-import inspect
 import itertools
+import typing as t
 from dataclasses import dataclass, field
 from functools import partial
 from queue import Empty, SimpleQueue
 from threading import Event, ThreadError
 from time import monotonic
-from typing import Any, Callable, Dict, Optional, Tuple, cast
 
 from hybrid_pool_executor.base import (
     Action,
@@ -29,7 +28,13 @@ from hybrid_pool_executor.constants import (
     ActionFlag,
     Function,
 )
-from hybrid_pool_executor.utils import KillableThread, coalesce, rectify
+from hybrid_pool_executor.utils import (
+    AsyncToSync,
+    KillableThread,
+    coalesce,
+    isasync,
+    rectify,
+)
 
 
 @dataclass
@@ -48,13 +53,13 @@ class ThreadWorker(BaseWorker):
         self._name = self._spec.name
 
         # bare bool vairiable may not be synced when using start()
-        self._state: Dict[str, bool] = {
+        self._state: t.Dict[str, bool] = {
             "inited": False,
             "running": False,
             "idle": False,
         }
-        self._thread: Optional[KillableThread] = None
-        self._current_task_name: Optional[str] = None
+        self._thread: t.Optional[KillableThread] = None
+        self._current_task_name: t.Optional[str] = None
 
     @property
     def name(self) -> str:
@@ -70,8 +75,8 @@ class ThreadWorker(BaseWorker):
     def _get_response(
         self,
         flag: ActionFlag = ACT_NONE,
-        result: Optional[Any] = None,
-        exception: Optional[BaseException] = None,
+        result: t.Optional[t.Any] = None,
+        exception: t.Optional[BaseException] = None,
     ):
         return Action(
             flag=flag,
@@ -116,7 +121,7 @@ class ThreadWorker(BaseWorker):
         err_count: int = 0
         cons_err_count: int = 0
 
-        response: Optional[Action] = None
+        response: t.Optional[Action] = None
 
         idle_tick = monotonic()
         while True:
@@ -147,8 +152,13 @@ class ThreadWorker(BaseWorker):
                 # check if order is cancelled
                 if task.cancelled:
                     raise CancelledError(f'Future "{task.name}" has been cancelled')
-                task.fn = cast(Callable[..., Any], task.fn)
-                result = task.fn(*task.args, **task.kwargs)
+                if isasync(task.fn):
+                    task.fn = t.cast(t.Coroutine[t.Any, t.Any, t.Any], task.fn)
+                    sync_coro = AsyncToSync(task.fn, *task.args, **task.kwargs)
+                    result = sync_coro()
+                else:
+                    task.fn = t.cast(t.Callable[..., t.Any], task.fn)
+                    result = task.fn(*task.args, **task.kwargs)
             except Exception as exc:
                 err_count += 1
                 cons_err_count += 1
@@ -171,7 +181,7 @@ class ThreadWorker(BaseWorker):
                     or 0 <= max_err_count <= err_count
                     or 0 <= max_cons_err_count <= cons_err_count
                 ):
-                    response = cast(Action, response)
+                    response = t.cast(Action, response)
                     response.add_flag(ACT_RESTART)
                     break
                 response_bus.put(response)
@@ -228,16 +238,16 @@ class ThreadManager(BaseManager):
         self._next_worker_seq = itertools.count().__next__
         self._next_task_seq = itertools.count().__next__
 
-        self._state: Dict[str, bool] = {
+        self._state: t.Dict[str, bool] = {
             "inited": False,
             "running": False,
         }
 
         self._task_bus = SimpleQueue()
         self._response_bus = SimpleQueue()
-        self._current_workers: Dict[str, ThreadWorker] = {}
-        self._current_tasks: Dict[str, Any] = {}
-        self._thread: Optional[KillableThread] = None
+        self._current_workers: t.Dict[str, ThreadWorker] = {}
+        self._current_tasks: t.Dict[str, t.Any] = {}
+        self._thread: t.Optional[KillableThread] = None
 
     def start(self):
         if self._state["running"] or self._thread is not None:
@@ -304,13 +314,13 @@ class ThreadManager(BaseManager):
 
     def get_worker_spec(
         self,
-        name: Optional[str] = None,
-        daemon: Optional[bool] = None,
-        idle_timeout: Optional[float] = None,
-        wait_interval: Optional[float] = None,
-        max_task_count: Optional[int] = None,
-        max_err_count: Optional[int] = None,
-        max_cons_err_count: Optional[int] = None,
+        name: t.Optional[str] = None,
+        daemon: t.Optional[bool] = None,
+        idle_timeout: t.Optional[float] = None,
+        wait_interval: t.Optional[float] = None,
+        max_task_count: t.Optional[int] = None,
+        max_err_count: t.Optional[int] = None,
+        max_cons_err_count: t.Optional[int] = None,
     ) -> ThreadWorkerSpec:
         if name and name in self._current_tasks:
             raise KeyError(f'Worker "{name}" exists.')
@@ -351,7 +361,7 @@ class ThreadManager(BaseManager):
         )
         return worker_spec
 
-    def _get_task_name(self, name: Optional[str] = None) -> str:
+    def _get_task_name(self, name: t.Optional[str] = None) -> str:
         if name:
             if name in self._current_tasks:
                 raise KeyError(f'Task "{name}" exists.')
@@ -367,17 +377,15 @@ class ThreadManager(BaseManager):
     def submit(
         self,
         fn: Function,
-        args: Optional[Tuple[Any, ...]] = (),
-        kwargs: Optional[Dict[str, Any]] = None,
-        name: Optional[str] = None,
+        args: t.Optional[t.Iterable[t.Any]] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+        name: t.Optional[str] = None,
     ) -> Future:
         if not self._state["running"]:
             raise RuntimeError(
                 f'Manager "{self._name}" is either stopped or not started yet '
                 "and not able to accept tasks."
             )
-        if inspect.iscoroutinefunction(fn) or inspect.iscoroutine(fn):
-            raise NotImplementedError("Coroutine function is not supported yet.")
         name = self._get_task_name(name)
         future = Future()
         task = ThreadTask(
@@ -394,8 +402,8 @@ class ThreadManager(BaseManager):
 
     def _consume_response(self):
         response: Action = self._response_bus.get()
-        response.task_name = cast(str, response.task_name)
-        response.worker_name = cast(str, response.worker_name)
+        response.task_name = t.cast(str, response.task_name)
+        response.worker_name = t.cast(str, response.worker_name)
         if response.match(ACT_DONE, ACT_EXCEPTION):
             self._current_tasks.pop(response.task_name)
         if response.match(ACT_CLOSE):
@@ -444,6 +452,6 @@ MODULE_SPEC = ModuleSpec(
     manager_spec_class=ThreadManagerSpec,
     worker_class=ThreadWorker,
     worker_spec_class=ThreadWorkerSpec,
-    tags=frozenset({"process", "thread"}),
+    tags=frozenset({"thread", "async"}),
     enabled=True,
 )

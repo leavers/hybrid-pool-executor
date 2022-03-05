@@ -2,15 +2,15 @@ import asyncio
 import ctypes
 import functools
 import inspect
+import typing as t
 from operator import le
-from threading import Thread
-from typing import Any, Callable, TypeVar
+from threading import Lock, Thread
 
 NoneType = type(None)
-T = TypeVar("T")
+T = t.TypeVar("T")
 
 
-def coalesce(*args) -> Any:
+def coalesce(*args) -> t.Any:
     for arg in args:
         if arg is not None:
             return arg
@@ -27,7 +27,7 @@ def _(
     val: int,
     fallback: int = -1,
     threshold: int = 0,
-    operator: Callable = le,
+    operator: t.Callable = le,
 ) -> int:
     return fallback if operator(val, threshold) else val
 
@@ -37,7 +37,7 @@ def _(
     val: float,
     fallback: float = -1.0,
     threshold: float = 0.0,
-    operator: Callable = le,
+    operator: t.Callable = le,
 ) -> float:
     return fallback if operator(val, threshold) else val
 
@@ -47,22 +47,52 @@ def _(*args, **kwargs):
     raise TypeError('Param "val" should not be None.')
 
 
+iscoroutine = inspect.iscoroutine
+iscoroutinefunction = inspect.iscoroutinefunction
+
+
+def isasync(object: t.Any):
+    return iscoroutine(object) or iscoroutinefunction(object)
+
+
+_singleton_instances = {}
+_singleton_lock = Lock()
+
+
+class Singleton:
+    def __new__(cls, *args, **kwargs):
+        if cls not in _singleton_instances:
+            with _singleton_lock:
+                if cls not in _singleton_instances:
+                    _singleton_instances[cls] = object.__new__(cls, *args, **kwargs)
+        return _singleton_instances[cls]
+
+
+class SingletonMeta(type):
+    def __call__(cls, *args, **kwargs):
+        if cls not in _singleton_instances:
+            with _singleton_lock:
+                if cls not in _singleton_instances:
+                    _singleton_instances[cls] = super().__call__(*args, **kwargs)
+        return _singleton_instances[cls]
+
+
 class AsyncToSync:
     def __init__(self, fn, /, *args, **kwargs):
         self.fn = fn
         self.args = args
         self.kwargs = kwargs
-        self.is_coro = inspect.iscoroutine(self.fn)
-        self.is_async = inspect.iscoroutinefunction(self.fn)
+        self.is_coro = iscoroutine(self.fn)
+        self.is_func = iscoroutinefunction(self.fn)
 
     def __call__(self, loop=None):
-        if not self.is_coro and not self.is_async:
+        if not self.is_coro and not self.is_func:
             return self.fn(*self.args, **self.kwargs)
-        if self.is_async:
+        if self.is_func:
             self.fn = self.fn(*self.args, **self.kwargs)
         if not loop:
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)

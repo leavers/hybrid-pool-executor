@@ -16,6 +16,7 @@ from hybrid_pool_executor.workers.async_ import (
 )
 
 
+@pytest.mark.timeout(10)
 def test_async_worker_task():
     async def simple_task():
         return "done"
@@ -38,6 +39,7 @@ def test_async_worker_task():
     assert ref() is None
 
 
+@pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_async_worker_task_async_future():
     async def simple_task():
@@ -57,6 +59,7 @@ async def test_async_worker_task_async_future():
     worker.stop()
 
 
+@pytest.mark.timeout(10)
 def test_async_worker_error():
     async def simple_error_task():
         raise RuntimeError("error")
@@ -88,6 +91,7 @@ def test_async_worker_error():
     assert ref() is None
 
 
+@pytest.mark.timeout(10)
 def test_async_worker_max_error():
     async def simple_task():
         return "done"
@@ -128,6 +132,7 @@ def test_async_worker_max_error():
     assert not worker.is_alive()
 
 
+@pytest.mark.timeout(10)
 def test_async_worker_cons_error():
     async def simple_error_task():
         raise RuntimeError("error")
@@ -159,6 +164,7 @@ def test_async_worker_cons_error():
     assert not worker.is_alive()
 
 
+@pytest.mark.timeout(10)
 def test_async_manager():
     async def simple_task():
         return "done"
@@ -173,6 +179,7 @@ def test_async_manager():
     manager.stop()
 
 
+@pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_async_manager_high_concurrency():
     async def simple_task(v):

@@ -1,3 +1,4 @@
+import asyncio
 import time
 import weakref
 from random import random
@@ -28,6 +29,12 @@ def simple_task_v(v):
     return v
 
 
+async def simple_async_task_v(v):
+    await asyncio.sleep(random())
+    return v
+
+
+@pytest.mark.timeout(10)
 def test_process_worker_task():
     worker_spec = ProcessWorkerSpec(
         name="TestProcessWorker",
@@ -52,6 +59,37 @@ def test_process_worker_task():
     assert ref() is None
 
 
+@pytest.mark.timeout(10)
+def test_processs_worker_async_task():
+    worker_spec = ProcessWorkerSpec(
+        name="TestThreadWorker",
+        max_task_count=3,
+        idle_timeout=1,
+        max_err_count=1,
+    )
+    tasks = []
+    for i in range(3):
+        task = ProcessTask(name="simple_async_task", fn=simple_async_task_v, args=[i])
+        tasks.append(task)
+        worker_spec.task_bus.put(task)
+
+    worker = ProcessWorker(worker_spec)
+    worker.start()
+
+    for i in range(3):
+        response: Action = worker_spec.response_bus.get()
+        assert response.result == i
+
+    worker.stop()
+    assert not worker.is_alive()
+    assert not worker.is_idle()
+
+    ref = weakref.ref(worker)
+    del worker_spec, worker, task
+    assert ref() is None
+
+
+@pytest.mark.timeout(10)
 def test_process_worker_error():
     worker_spec = ProcessWorkerSpec(
         name="TestProcessWorker",
@@ -73,11 +111,8 @@ def test_process_worker_error():
     assert not worker.is_alive()
     assert not worker.is_idle()
 
-    ref = weakref.ref(worker)
-    del worker_spec, worker, task
-    assert ref() is None
 
-
+@pytest.mark.timeout(10)
 def test_process_manager():
     manager_spec = ProcessManagerSpec()
     manager = ProcessManager(manager_spec)
@@ -89,6 +124,7 @@ def test_process_manager():
     manager.stop()
 
 
+@pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_process_manager_high_concurrency():
     with ProcessManager(ProcessManagerSpec()) as manager:

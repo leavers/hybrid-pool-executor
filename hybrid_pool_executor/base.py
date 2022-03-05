@@ -1,11 +1,11 @@
 import asyncio
+import typing as t
 from abc import ABC, abstractmethod
 from concurrent.futures._base import CancelledError as BaseCancelledError
 from concurrent.futures._base import Executor
 from concurrent.futures._base import Future as _Future
 from dataclasses import dataclass, field
 from queue import SimpleQueue
-from typing import Any, Dict, FrozenSet, Literal, Optional, Tuple, Type, Union, cast
 
 from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
 
@@ -13,6 +13,9 @@ from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
 For python 3.7+, there is no significant speed/size difference between object,
 dataclass and namedtuple.
 """
+
+# TODO: migrate common codes into base.py
+# TODO: discard exception traceback related to workers
 
 
 @dataclass
@@ -24,19 +27,19 @@ class Action:
     """
 
     flag: ActionFlag = ACT_NONE
-    message: Optional[str] = None
-    task_name: Optional[str] = None
-    worker_name: Optional[str] = None
-    result: Any = None
-    exception: Optional[BaseException] = None
+    message: t.Optional[str] = None
+    task_name: t.Optional[str] = None
+    worker_name: t.Optional[str] = None
+    result: t.Any = None
+    exception: t.Optional[BaseException] = None
 
     def add_flag(self, flag: ActionFlag):
         self.flag |= flag
 
     def match(
         self,
-        *flags: Union[Tuple[ActionFlag], ActionFlag],
-        strategy: Literal["all", "any"] = "any",
+        *flags: t.Union[t.Iterable[ActionFlag], ActionFlag],
+        strategy: t.Literal["all", "any"] = "any",
     ) -> bool:
         if strategy not in ("any", "all"):
             raise ValueError(
@@ -44,8 +47,8 @@ class Action:
                 f'got "{strategy}" instread".'
             )
         if len(flags) == 1 and isinstance(flags[0], (tuple, list, set)):
-            flags = flags[0]
-        flags = cast(Tuple[ActionFlag, ...], flags)
+            flags = tuple(flags[0])
+        flags = t.cast(t.Tuple[ActionFlag, ...], flags)
         m = map(lambda flag: self.flag & flag, flags)
         return any(m) if strategy == "any" else all(m)
 
@@ -61,8 +64,8 @@ class BaseTask(ABC):
 
     name: str
     fn: Function
-    args: Tuple[Any, ...] = ()
-    kwargs: Dict[str, Any] = field(default_factory=dict)
+    args: t.Iterable[t.Any] = ()
+    kwargs: t.Dict[str, t.Any] = field(default_factory=dict)
     cancelled: bool = False
 
 
@@ -166,6 +169,14 @@ BaseExecutor = Executor
 CancelledError = BaseCancelledError
 
 
+class ExistsError(Exception):
+    pass
+
+
+class NotSupportedError(Exception):
+    pass
+
+
 @dataclass
 class BaseManagerSpec(ABC):
     mode: str = "abstract"
@@ -193,14 +204,14 @@ class BaseManager(ABC):
     def submit(
         self,
         fn: Function,
-        args: Optional[Tuple[Any, ...]] = (),
-        kwargs: Optional[Dict[str, Any]] = None,
-        name: Optional[str] = None,
+        args: t.Optional[t.Iterable[t.Any]] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+        name: t.Optional[str] = None,
     ) -> Future:
         pass
 
     @abstractmethod
-    def stop(self, timeout: Optional[float] = None):
+    def stop(self, timeout: t.Optional[float] = None):
         pass
 
     @abstractmethod
@@ -218,9 +229,12 @@ class BaseManager(ABC):
 @dataclass
 class ModuleSpec:
     name: str
-    manager_class: Type[BaseManager]
-    manager_spec_class: Type[BaseManagerSpec]
-    worker_class: Type[BaseWorker]
-    worker_spec_class: Type[BaseWorkerSpec]
-    tags: FrozenSet[str]
+    manager_class: t.Type[BaseManager]
+    manager_spec_class: t.Type[BaseManagerSpec]
+    worker_class: t.Type[BaseWorker]
+    worker_spec_class: t.Type[BaseWorkerSpec]
+    tags: t.FrozenSet[str]
     enabled: bool = True
+
+    def __post_init__(self):
+        assert self.name in self.tags
