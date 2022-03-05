@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 project = "hybrid_pool_executor"
 
@@ -14,13 +14,14 @@ def get_version():
 
 install_requires = ["dataclasses; python_version~='3.6.0'"]
 tests_require = [
+    "black",
+    "coverage>=5.3",
+    "flake8",
+    "isort>=5.0.0",
     "pytest>=6.2.5",
     "pytest-asyncio",
     "pytest-cov",
-    "isort>=5.0.0",
-    "coverage>=5.3",
-    "flake8",
-    "black",
+    "pytest-timeout",
 ]
 dev_require = tests_require + [
     "tox",
@@ -43,7 +44,7 @@ setup_kwargs = dict(
     author_email="leavers930@gmail.com",
     url="https://github.com/leavers/hybrid-pool-executor",
     py_modules=[project],
-    packages=[project],
+    packages=find_packages(),
     install_requires=install_requires,
     tests_require=tests_require,
     extras_require=extras_require,
