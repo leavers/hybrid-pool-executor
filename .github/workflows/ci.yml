@@ -25,9 +25,7 @@ jobs:
         os:
           - "ubuntu-20.04"
         toxenv:
-          - "py38"
-          - "py39"
-          - "py310"
+          - "flake8"
         include:
           - python-version: "3.8"
             os: "ubuntu-20.04"
