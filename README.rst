@@ -1,3 +1,8 @@
+|Build Status|
+
+HybridPoolExecutor
+==================
+
 HybridPoolExecutor is a parallel executor that supports thead, process and async three operating models at the same time.
 
 Example:
