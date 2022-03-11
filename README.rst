@@ -47,3 +47,5 @@ Example:
     if __name__ == '__main__':
         test_run()
 
+.. |Build Status| image:: https://github.com/leavers/hybrid-pool-executor/actions/workflows/tests.yml/badge.svg
+   :target: https://github.com/leavers/hybrid-pool-executor/actions/workflows/tests.yml
