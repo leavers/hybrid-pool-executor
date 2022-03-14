@@ -125,7 +125,7 @@ def test_process_manager():
     manager.stop()
 
 
-@pytest.mark.timeout(10 if sys.platform != "win32" else 60)
+@pytest.mark.timeout(20 if sys.platform != "win32" else 60)
 @pytest.mark.asyncio
 async def test_process_manager_high_concurrency():
     with ProcessManager(ProcessManagerSpec()) as manager:
