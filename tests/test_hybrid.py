@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import time
 from random import random
 
@@ -65,7 +66,7 @@ def test_executor_guess_mode():
     assert len(guess_mode(simple_delay_task, tags=["black hole"])) == 0
 
 
-@pytest.mark.timeout(10)
+@pytest.mark.timeout(20 if sys.platform != "win32" else 60)
 @pytest.mark.asyncio
 async def test_executor_high_concurrency():
     futures = {
@@ -74,7 +75,7 @@ async def test_executor_high_concurrency():
         "async": [],
     }
     with HybridPoolExecutor() as pool:
-        for i in range(1024):
+        for i in range(128):
             if i < 32:
                 futures["process"].append(
                     pool.submit_task(fn=simple_delay_task, args=(i,), mode="process")
@@ -87,7 +88,7 @@ async def test_executor_high_concurrency():
             )
             # TODO: process futures need syncing among processes by manager, code will
             #       be probably blocked here to wait for all process futures to be set.
-    for i in range(1024):
+    for i in range(128):
         if i < 32:
             assert await futures["process"][i] == i
         assert await futures["thread"][i] == i
