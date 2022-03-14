@@ -4,7 +4,7 @@ import multiprocessing as mp
 import typing as t
 from dataclasses import dataclass, field
 from functools import partial
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Value
 from queue import Empty
 from threading import Event, ThreadError
 from time import monotonic
@@ -49,6 +49,7 @@ class ProcessWorkerSpec(BaseWorkerSpec):
     task_bus: Queue = field(default_factory=Queue)
     request_bus: Queue = field(default_factory=Queue)
     response_bus: Queue = field(default_factory=Queue)
+    task_bus_qsize: Value = field(default_factory=partial(Value, "L", 0))
     max_task_count: int = 1
     daemon: bool = False
 
@@ -125,6 +126,7 @@ class ProcessWorker(BaseWorker):
             )
 
         task_bus: Queue = spec.task_bus
+        task_bus_qsize: Value = spec.task_bus_qsize
         request_bus: Queue = spec.request_bus
         response_bus: Queue = spec.response_bus
         max_task_count: int = spec.max_task_count
@@ -158,6 +160,7 @@ class ProcessWorker(BaseWorker):
                 break
             try:
                 task: ProcessTask = task_bus.get(timeout=wait_interval)
+                task_bus_qsize.value -= 1
             except Empty:
                 continue
             result = None
@@ -255,6 +258,7 @@ class ProcessManager(BaseManager):
         }
 
         self._task_bus = Queue()
+        self._task_bus_qsize = Value("L", 0)
         self._response_bus = Queue()
         self._current_workers: t.Dict[str, ProcessWorker] = {}
         self._current_tasks: t.Dict[str, t.Any] = {}
@@ -348,6 +352,7 @@ class ProcessManager(BaseManager):
                 ),
             ),
             task_bus=self._task_bus,
+            task_bus_qsize=self._task_bus_qsize,
             request_bus=Queue(),
             response_bus=self._response_bus,
             daemon=coalesce(daemon, self._default_worker_spec.daemon),
@@ -413,6 +418,7 @@ class ProcessManager(BaseManager):
         self._current_tasks[name] = task
         # exclude future when sending to other process to reduce size
         self._task_bus.put(dataclasses.replace(task, future=None))
+        self._task_bus_qsize.value += 1
         self._adjust_workers()
         return future
 
@@ -436,7 +442,7 @@ class ProcessManager(BaseManager):
 
     def _adjust_iterator(self) -> range:
         if self._spec.incremental or self._spec.num_workers < 0:
-            qsize = self._task_bus.qsize()
+            qsize = self._task_bus_qsize.value
             num_idle_workers: int = sum(
                 1 if w.is_idle() else 0 for w in self._current_workers.values()
             )
