@@ -6,10 +6,19 @@ line-length = 88
 
 [tool.isort]
 profile = "black"
-src_paths = ["hybrid_pool_executor", "tests"]
+src_paths = ["hybrid_pool_executor", "tests", "setup.py"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+
+[tool.coverage.run]
+branch = true
+source = ["hybrid_pool_executor"]
+parallel = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: nocover"]
 
 # mock setting(s) of flake8 (in tox.ini currently)
 #[flake8]
