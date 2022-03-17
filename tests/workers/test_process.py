@@ -7,7 +7,7 @@ from random import random
 import pytest
 
 from hybrid_pool_executor.constants import ACT_EXCEPTION, ACT_RESTART
-from hybrid_pool_executor.workers.process import (
+from hybrid_pool_executor.workers.process.worker import (
     Action,
     ProcessManager,
     ProcessManagerSpec,

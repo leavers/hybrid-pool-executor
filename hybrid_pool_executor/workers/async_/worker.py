@@ -1,11 +1,10 @@
+import asyncio
 import dataclasses
 import itertools
-import multiprocessing as mp
 import typing as t
 from dataclasses import dataclass, field
 from functools import partial
-from multiprocessing import Process, Queue, Value
-from queue import Empty
+from queue import Empty, SimpleQueue
 from threading import Event, ThreadError
 from time import monotonic
 
@@ -19,7 +18,6 @@ from hybrid_pool_executor.base import (
     CancelledError,
     Function,
     Future,
-    ModuleSpec,
 )
 from hybrid_pool_executor.constants import (
     ACT_CLOSE,
@@ -28,42 +26,40 @@ from hybrid_pool_executor.constants import (
     ACT_NONE,
     ACT_RESET,
     ACT_RESTART,
-    ActionFlag,
 )
-from hybrid_pool_executor.utils import (
-    AsyncToSync,
-    KillableThread,
-    coalesce,
-    isasync,
-    rectify,
-)
+from hybrid_pool_executor.utils import KillableThread, coalesce, isasync, rectify
+
+NoneType = type(None)
 
 
 @dataclass
-class ProcessTask(BaseTask):
-    future: t.Optional[Future] = None
+class AsyncTask(BaseTask):
+    future: Future = field(default_factory=Future)
 
 
 @dataclass
-class ProcessWorkerSpec(BaseWorkerSpec):
-    task_bus: Queue = field(default_factory=Queue)
-    request_bus: Queue = field(default_factory=Queue)
-    response_bus: Queue = field(default_factory=Queue)
-    task_bus_qsize: Value = field(default_factory=partial(Value, "L", 0))
-    max_task_count: int = 1
-    daemon: bool = False
+class AsyncWorkerSpec(BaseWorkerSpec):
+    max_task_count: int = -1
+    max_err_count: int = 10
+    daemon: bool = True
 
 
-class ProcessWorker(BaseWorker):
-    def __init__(self, spec: ProcessWorkerSpec):
+class AsyncWorker(BaseWorker):
+    def __init__(self, spec: AsyncWorkerSpec):
         self._spec = dataclasses.replace(spec)
         self._name = self._spec.name
 
-        self._inited = mp.Event()
-        self._running = mp.Event()
-        self._idle = mp.Event()
+        self._loop: t.Optional[asyncio.AbstractEventLoop] = None
+        self._async_tasks: t.Dict[str, asyncio.Task] = {}
+        self._current_tasks: t.Dict[str, AsyncTask] = {}
 
-        self._process: t.Optional[Process] = None
+        # bare bool vairiable may not be synced when using start()
+        self._state: t.Dict[str, bool] = {
+            "inited": False,
+            "running": False,
+            "idle": False,
+        }
+        self._thread: t.Optional[KillableThread] = None
         self._current_task_name: t.Optional[str] = None
 
     @property
@@ -71,81 +67,90 @@ class ProcessWorker(BaseWorker):
         return self._name
 
     @property
-    def spec(self) -> ProcessWorkerSpec:
+    def spec(self) -> AsyncWorkerSpec:
         return self._spec
 
     def is_alive(self) -> bool:
-        return self._running.is_set()
+        return self._state["running"]
 
     def start(self):
-        if self._running.is_set() or self._process is not None:
+        if self._state["running"] or self._thread is not None:
             raise RuntimeError(
                 f'{self.__class__.__qualname__} "{self._name}" is already started.'
             )
-        self._process = Process(
-            target=self._run,
-            name=self._name,
-            kwargs={
-                "spec": self._spec,
-                "inited": self._inited,
-                "idle": self._idle,
-                "running": self._running,
-            },
-            daemon=self._spec.daemon,
-        )
-        self._process.start()
+        self._thread = KillableThread(target=self._run, daemon=self._spec.daemon)
+        self._thread.start()
 
-        while not self._running.is_set():
+        # Block method until self._run actually starts to avoid creating multiple
+        # workers when in high concurrency situation.
+        state = self._state
+        while not state["inited"]:
             pass
 
-    @staticmethod
-    def _run(
-        spec: ProcessWorkerSpec,
-        inited: Event,
-        idle: Event,
-        running: Event,
-    ):
-        inited.set()
-        idle.set()
-        running.set()
+    async def _async_run(self):
+        state = self._state
+        state["running"] = True
+        state["idle"] = True
+        state["inited"] = True
 
-        worker_name = spec.name
-        current_task_name: t.Optional[str] = None
-
-        def get_response(
-            flag: ActionFlag = ACT_NONE,
-            result: t.Optional[t.Any] = None,
-            exception: t.Optional[BaseException] = None,
-        ) -> Action:
-            return Action(
-                flag=flag,
-                task_name=current_task_name,
-                worker_name=worker_name,
-                result=result,
-                exception=exception,
-            )
-
-        task_bus: Queue = spec.task_bus
-        task_bus_qsize: Value = spec.task_bus_qsize
-        request_bus: Queue = spec.request_bus
-        response_bus: Queue = spec.response_bus
+        spec = self._spec
+        worker_name: str = self._name
+        task_bus: SimpleQueue = spec.task_bus
+        request_bus: SimpleQueue = spec.request_bus
+        response_bus: SimpleQueue = spec.response_bus
         max_task_count: int = spec.max_task_count
         max_err_count: int = spec.max_err_count
         max_cons_err_count: int = spec.max_cons_err_count
         idle_timeout: float = spec.idle_timeout
         wait_interval: float = spec.wait_interval
 
+        loop = t.cast(asyncio.BaseEventLoop, self._loop)
+        async_tasks = self._async_tasks
+        async_response_bus = asyncio.Queue()
+
+        async def coroutine(
+            task: AsyncTask,
+            worker_name: str,
+            bus: asyncio.Queue,
+        ):
+            result = resp = None
+            try:
+                task.fn = t.cast(t.Callable[..., t.Any], task.fn)
+                result = await task.fn(*task.args, **task.kwargs)
+            except Exception as exc:
+                resp = Action(
+                    flag=ACT_EXCEPTION,
+                    task_name=task.name,
+                    worker_name=worker_name,
+                )
+                task.future.set_exception(exc)
+            else:
+                resp = Action(
+                    flag=ACT_DONE,
+                    task_name=task.name,
+                    worker_name=worker_name,
+                )
+                task.future.set_result(result)
+            finally:
+                await bus.put(resp)
+
         task_count: int = 0
         err_count: int = 0
         cons_err_count: int = 0
+        current_coroutines: int = 0
+        is_prev_coro_err: bool = False
 
-        response: t.Optional[Action] = None
-        should_exit: bool = False
+        response = None
         idle_tick = monotonic()
         while True:
-            if monotonic() - idle_tick > idle_timeout:
-                response = get_response(ACT_CLOSE)
-                break
+            if current_coroutines > 0:
+                state["idle"] = False
+                idle_tick = monotonic()
+            else:
+                state["idle"] = True
+                if monotonic() - idle_tick > idle_timeout:
+                    response = Action(flag=ACT_CLOSE, worker_name=worker_name)
+                    break
             while not request_bus.empty():
                 request: Action = request_bus.get()
                 if request.match(ACT_RESET):
@@ -153,98 +158,127 @@ class ProcessWorker(BaseWorker):
                     err_count = 0
                     cons_err_count = 0
                 if request.match(ACT_CLOSE, ACT_RESTART):
-                    response = get_response(request.flag)
-                    should_exit = True
+                    response = Action(flag=request.flag, worker_name=worker_name)
                     break
-            if should_exit or not running.is_set():
+            if not state["running"]:
                 break
             try:
-                task: ProcessTask = task_bus.get(timeout=wait_interval)
-                task_bus_qsize.value -= 1
+                while not 0 <= max_task_count <= task_count:
+                    task: AsyncTask = task_bus.get(timeout=wait_interval)
+                    # check if future is cancelled
+                    if task.cancelled:
+                        task_bus.put(
+                            Action(
+                                flag=ACT_EXCEPTION,
+                                task_name=task.name,
+                                worker_name=worker_name,
+                                exception=CancelledError(
+                                    f'Future "{task.name}" has been cancelled'
+                                ),
+                            )
+                        )
+                        del task
+                        continue
+                    else:
+                        state["idle"] = False
+                        async_task: asyncio.Task = loop.create_task(
+                            coroutine(
+                                task=task,
+                                worker_name=worker_name,
+                                bus=async_response_bus,
+                            )
+                        )
+                        async_tasks[task.name] = async_task
+                        del task
+                    task_count += 1
+                    current_coroutines += 1
             except Empty:
-                continue
-            result = None
-            try:
-                idle.clear()
-                current_task_name = task.name
-
-                # check if future is cancelled
-                if task.cancelled:
-                    raise CancelledError(f'Future "{task.name}" has been cancelled')
-                if isasync(task.fn):
-                    task.fn = t.cast(t.Coroutine[t.Any, t.Any, t.Any], task.fn)
-                    sync_coro = AsyncToSync(task.fn, *task.args, **task.kwargs)
-                    result = sync_coro()
+                pass
+            await asyncio.sleep(0)  # ugly but works
+            while not async_response_bus.empty():
+                response = await async_response_bus.get()
+                await async_tasks.pop(response.task_name)
+                current_coroutines -= 1
+                if response.match(ACT_EXCEPTION):
+                    err_count += 1
+                    if is_prev_coro_err:
+                        cons_err_count += 1
+                    else:
+                        cons_err_count = 1
+                    is_prev_coro_err = True
                 else:
-                    task.fn = t.cast(t.Callable[..., t.Any], task.fn)
-                    result = task.fn(*task.args, **task.kwargs)
-            except Exception as exc:
-                err_count += 1
-                cons_err_count += 1
-                response = get_response(flag=ACT_EXCEPTION, exception=exc)
-            else:
-                cons_err_count = 0
-                response = get_response(flag=ACT_DONE, result=result)
-            finally:
-                del task
-                task_count += 1
-
-                current_task_name = None
-                idle.set()
-
-                idle_tick = monotonic()
+                    cons_err_count = 0
+                    is_prev_coro_err = False
                 if (
                     0 <= max_task_count <= task_count
                     or 0 <= max_err_count <= err_count
                     or 0 <= max_cons_err_count <= cons_err_count
                 ):
-                    response = t.cast(Action, response)
                     response.add_flag(ACT_RESTART)
+                    response_bus.put(response)
+                    state["running"] = False
                     break
                 response_bus.put(response)
                 response = None
-
-        idle.clear()
-        running.clear()
+            if not state["running"]:
+                break
+        state["running"] = False
+        for async_task in async_tasks.values():
+            if not async_task.done():
+                await async_task
         if response is not None and response.flag != ACT_NONE:
+            if not response.match(ACT_CLOSE, ACT_RESTART):
+                response_bus.put(response)
+            else:
+                await async_response_bus.put(response)
+        while not async_response_bus.empty():
+            response = await async_response_bus.get()
             response_bus.put(response)
 
+    def _run(self):
+        self._loop = asyncio.new_event_loop()
+        self._loop.run_until_complete(self._async_run())
+
     def stop(self):
-        self._running.clear()
-        if self._process and self._process.is_alive():
-            self._process.join()
-        self._process = None
+        self._state["running"] = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join()
+        self._thread = None
 
     def terminate(self):
-        self._running.clear()
-        if self._process and self._process.is_alive():
-            self._process.terminate()
-        self._process = None
+        self._state["running"] = False
+        try:
+            if self._thread and self._thread.is_alive():
+                self._thread.terminate()
+        except ThreadError:
+            pass
+        self._thread = None
 
     def is_idle(self) -> bool:
-        return self._idle.is_set()
+        state = self._state
+        return state["idle"] if state["running"] else False
 
 
 @dataclass
-class ProcessManagerSpec(BaseManagerSpec):
-    mode: str = "process"
-    name_pattern: str = "ProcessManager-{manager_seq}"
+class AsyncManagerSpec(BaseManagerSpec):
+    mode: str = "async"
+    num_workers: int = 1
+    name_pattern: str = "AsyncManager-{manager_seq}"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
-    worker_name_pattern: str = "ProcessWorker-{worker} [{manager}]"
-    task_name_pattern: str = "ProcessTask-{task} [{manager}]"
-    default_worker_spec: ProcessWorkerSpec = field(
-        default_factory=partial(ProcessWorkerSpec, name="DefaultWorkerSpec")
+    worker_name_pattern: str = "AsyncWorker-{worker} [{manager}]"
+    task_name_pattern: str = "AsyncTask-{task} [{manager}]"
+    default_worker_spec: AsyncWorkerSpec = field(
+        default_factory=partial(AsyncWorkerSpec, name="DefaultWorkerSpec")
     )
 
 
-class ProcessManager(BaseManager):
+class AsyncManager(BaseManager):
     _next_manager_seq = itertools.count().__next__
 
-    def __init__(self, spec: ProcessManagerSpec):
+    def __init__(self, spec: AsyncManagerSpec):
         self._spec = dataclasses.replace(spec)
         self._default_worker_spec = dataclasses.replace(spec.default_worker_spec)
-
         self._name = self._spec.name_pattern.format(
             manager_seq=self._next_manager_seq()
         )
@@ -257,10 +291,9 @@ class ProcessManager(BaseManager):
             "running": False,
         }
 
-        self._task_bus = Queue()
-        self._task_bus_qsize = Value("L", 0)
-        self._response_bus = Queue()
-        self._current_workers: t.Dict[str, ProcessWorker] = {}
+        self._task_bus = SimpleQueue()
+        self._response_bus = SimpleQueue()
+        self._current_workers: t.Dict[str, AsyncWorker] = {}
         self._current_tasks: t.Dict[str, t.Any] = {}
         self._thread: t.Optional[KillableThread] = None
 
@@ -287,7 +320,6 @@ class ProcessManager(BaseManager):
         num_process_limit: int = rectify(
             coalesce(self._spec.max_processing_responses_per_iteration, -1), -1
         )
-        consume_response = self._consume_response
         response_bus = self._response_bus
         while True:
             if not state["running"]:
@@ -295,18 +327,14 @@ class ProcessManager(BaseManager):
 
             num_processed: int = 0
             while not response_bus.empty():
-                consume_response()
+                self._consume_response()
                 num_processed += 1
                 if num_processed >= num_process_limit:
                     break
             if num_processed == 0:
                 metronome.wait(wait_interval)
-        # TODO: this part blocks function to make sure all processes' result be
-        #       captured, however this may also block the stop/shutdown procedure,
-        #       especially when using "with" statement (blocked on __exit__() until all
-        #       result has been sent back). Maybe we need a better implementation.
-        while self._current_tasks:
-            consume_response()
+        while not response_bus.empty():
+            self._consume_response()
         self._stop_all_workers()
 
     def _stop_all_workers(self):
@@ -340,10 +368,10 @@ class ProcessManager(BaseManager):
         max_task_count: t.Optional[int] = None,
         max_err_count: t.Optional[int] = None,
         max_cons_err_count: t.Optional[int] = None,
-    ) -> ProcessWorkerSpec:
+    ) -> AsyncWorkerSpec:
         if name and name in self._current_tasks:
             raise KeyError(f'Worker "{name}" exists.')
-        worker_spec = ProcessWorkerSpec(
+        worker_spec = AsyncWorkerSpec(
             name=coalesce(
                 name,
                 self._spec.worker_name_pattern.format(
@@ -352,8 +380,7 @@ class ProcessManager(BaseManager):
                 ),
             ),
             task_bus=self._task_bus,
-            task_bus_qsize=self._task_bus_qsize,
-            request_bus=Queue(),
+            request_bus=SimpleQueue(),
             response_bus=self._response_bus,
             daemon=coalesce(daemon, self._default_worker_spec.daemon),
             idle_timeout=rectify(
@@ -406,9 +433,13 @@ class ProcessManager(BaseManager):
                 f'Manager "{self._name}" is either stopped or not started yet '
                 "and not able to accept tasks."
             )
+        if not isasync(fn):
+            raise NotImplementedError(
+                f'Param "fn" ({fn}) is neither a coroutine nor a coroutine function.'
+            )
         name = self._get_task_name(name)
         future = Future()
-        task = ProcessTask(
+        task = AsyncTask(
             name=name,
             fn=fn,
             args=args or (),
@@ -416,9 +447,7 @@ class ProcessManager(BaseManager):
             future=future,
         )
         self._current_tasks[name] = task
-        # exclude future when sending to other process to reduce size
-        self._task_bus.put(dataclasses.replace(task, future=None))
-        self._task_bus_qsize.value += 1
+        self._task_bus.put(task)
         self._adjust_workers()
         return future
 
@@ -427,12 +456,7 @@ class ProcessManager(BaseManager):
         response.task_name = t.cast(str, response.task_name)
         response.worker_name = t.cast(str, response.worker_name)
         if response.match(ACT_DONE, ACT_EXCEPTION):
-            task: ProcessTask = self._current_tasks.pop(response.task_name)
-            task.future = t.cast(Future, task.future)
-            if response.match(ACT_DONE):
-                task.future.set_result(response.result)
-            else:
-                task.future.set_exception(response.exception)
+            self._current_tasks.pop(response.task_name)
         if response.match(ACT_CLOSE):
             self._current_workers.pop(response.worker_name)
         elif response.match(ACT_RESTART):
@@ -442,7 +466,7 @@ class ProcessManager(BaseManager):
 
     def _adjust_iterator(self) -> range:
         if self._spec.incremental or self._spec.num_workers < 0:
-            qsize = self._task_bus_qsize.value
+            qsize = self._task_bus.qsize()
             num_idle_workers: int = sum(
                 1 if w.is_idle() else 0 for w in self._current_workers.values()
             )
@@ -468,17 +492,6 @@ class ProcessManager(BaseManager):
             return
         # if more workers are needed, create them
         for _ in self._adjust_iterator():
-            worker = ProcessWorker(self.get_worker_spec())
+            worker = AsyncWorker(self.get_worker_spec())
             self._current_workers[worker._name] = worker
             worker.start()
-
-
-MODULE_SPEC = ModuleSpec(
-    name="process",
-    manager_class=ProcessManager,
-    manager_spec_class=ProcessManagerSpec,
-    worker_class=ProcessWorker,
-    worker_spec_class=ProcessWorkerSpec,
-    tags=frozenset({"process", "thread", "async"}),
-    enabled=True,
-)

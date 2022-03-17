@@ -6,7 +6,7 @@ from random import random
 import pytest
 
 from hybrid_pool_executor.constants import ACT_EXCEPTION, ACT_RESTART
-from hybrid_pool_executor.workers.thread import (
+from hybrid_pool_executor.workers.thread.worker import (
     Action,
     ThreadManager,
     ThreadManagerSpec,
