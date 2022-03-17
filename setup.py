@@ -15,12 +15,11 @@ def get_version():
 install_requires = []
 tests_require = [
     "black",
-    "coverage>=5.3",
+    "coverage[toml]>=5.3",
     "flake8",
     "isort>=5.0.0",
     "pytest>=6.2.5",
     "pytest-asyncio",
-    "pytest-cov",
     "pytest-timeout",
 ]
 dev_require = tests_require + [
