@@ -1,3 +1,4 @@
+import collections
 import errno
 import sys
 import threading
@@ -56,9 +57,24 @@ class Queue(BaseQueue):
         ) = state
         self._reset()
 
+    def _after_fork(self):
+        debug('Queue._after_fork()')
+        self._reset(after_fork=True)
+
     def _reset(self, after_fork=False):
-        # for compatibility in windows/macos or spawn context
-        return super()._reset(after_fork=after_fork)
+        if after_fork:
+            self._notempty._at_fork_reinit()
+        else:
+            self._notempty = threading.Condition(threading.Lock())
+        self._buffer = collections.deque()
+        self._thread = None
+        self._jointhread = None
+        self._joincancelled = False
+        self._closed = False
+        self._close = None
+        self._send_bytes = self._writer.send_bytes
+        self._recv_bytes = self._reader.recv_bytes
+        self._poll = self._reader.poll
 
     def put(self, obj, block=True, timeout=None):
         if self._closed:
@@ -233,3 +249,12 @@ class Queue(BaseQueue):
                     queue_sem.release()
                     qsize.value -= 1
                     onerror(e, obj)
+
+    @staticmethod
+    def _on_queue_feeder_error(e, obj):
+        """
+        Private API hook called when feeding data in the background thread
+        raises an exception.  For overriding by concurrent.futures.
+        """
+        import traceback
+        traceback.print_exc()
