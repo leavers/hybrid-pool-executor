@@ -56,6 +56,10 @@ class Queue(BaseQueue):
         ) = state
         self._reset()
 
+    def _reset(self, after_fork=False):
+        # for compatibility in windows/macos or spawn context
+        return super()._reset(after_fork=after_fork)
+
     def put(self, obj, block=True, timeout=None):
         if self._closed:
             raise ValueError(f"Queue {self!r} is closed")
