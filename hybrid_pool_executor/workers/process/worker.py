@@ -4,7 +4,7 @@ import multiprocessing as mp
 import typing as t
 from dataclasses import dataclass, field
 from functools import partial
-from multiprocessing import Process, Queue, Value
+from multiprocessing import Process, Value
 from queue import Empty
 from threading import Event, ThreadError
 from time import monotonic
@@ -36,6 +36,7 @@ from hybrid_pool_executor.utils import (
     isasync,
     rectify,
 )
+from hybrid_pool_executor.workers.process.queue import Queue
 
 
 @dataclass

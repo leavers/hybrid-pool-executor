@@ -13,6 +13,9 @@ def get_version():
 
 
 install_requires = []
+extra_require = [
+    "cloudpickle",
+]
 tests_require = [
     "black",
     "coverage[toml]>=5.3",
@@ -26,6 +29,7 @@ dev_require = tests_require + [
     "tox",
 ]
 extras_require = {
+    "extra": extra_require,
     "test": tests_require,
     "dev": dev_require,
 }
