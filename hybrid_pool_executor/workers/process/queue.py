@@ -1,16 +1,17 @@
 import collections
 import errno
+import os
 import sys
 import threading
 import time
 import typing as t
 import weakref
-from multiprocessing import Value
+from multiprocessing import Value, connection
 from multiprocessing import context as _ctx
 from multiprocessing import get_context
 from multiprocessing.queues import Queue as BaseQueue
 from multiprocessing.reduction import ForkingPickler
-from multiprocessing.util import Finalize, debug, info, is_exiting
+from multiprocessing.util import Finalize, debug, info, is_exiting, register_after_fork
 from queue import Empty, Full
 
 try:
@@ -26,8 +27,29 @@ _sentinel = object()
 
 class Queue(BaseQueue):
     def __init__(self, maxsize: int = 0, *, ctx: t.Optional[_ctx.BaseContext] = None):
-        super().__init__(maxsize=maxsize, ctx=ctx or get_context())
+        if maxsize <= 0:
+            # Can raise ImportError (see issues #3770 and #23400)
+            from multiprocessing.synchronize import SEM_VALUE_MAX as maxsize
+
+        if not ctx:
+            ctx = get_context()
+
+        self._maxsize = maxsize
+        self._reader, self._writer = connection.Pipe(duplex=False)
+        self._rlock = ctx.Lock()
+        self._opid = os.getpid()
         self._qsize = Value("L", 0)
+        if sys.platform == "win32":
+            self._wlock = None
+        else:
+            self._wlock = ctx.Lock()
+        self._sem = ctx.BoundedSemaphore(maxsize)
+        # For use by concurrent.futures
+        self._ignore_epipe = False
+        self._reset()
+
+        if sys.platform != "win32":
+            register_after_fork(self, Queue._after_fork)
 
     def __getstate__(self):
         _ctx.assert_spawning(self)
@@ -58,7 +80,7 @@ class Queue(BaseQueue):
         self._reset()
 
     def _after_fork(self):
-        debug('Queue._after_fork()')
+        debug("Queue._after_fork()")
         self._reset(after_fork=True)
 
     def _reset(self, after_fork=False):
@@ -257,4 +279,5 @@ class Queue(BaseQueue):
         raises an exception.  For overriding by concurrent.futures.
         """
         import traceback
+
         traceback.print_exc()
