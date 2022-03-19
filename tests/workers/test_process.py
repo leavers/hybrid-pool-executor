@@ -6,8 +6,16 @@ from random import random
 
 import pytest
 
+try:
+    import cloudpickle  # noqa: F401
+
+    skip_cloudpickle_test = False
+except ImportError:
+    skip_cloudpickle_test = True
+
+
 from hybrid_pool_executor.constants import ACT_EXCEPTION, ACT_RESTART
-from hybrid_pool_executor.workers.process import (
+from hybrid_pool_executor.workers.process.worker import (
     Action,
     ProcessManager,
     ProcessManagerSpec,
@@ -134,3 +142,30 @@ async def test_process_manager_high_concurrency():
             futures.append(manager.submit(simple_task_v, (i,)))
         for i, future in enumerate(futures):
             assert await future == i
+
+
+@pytest.mark.skipif(skip_cloudpickle_test, reason="cloudpickle is not installed")
+@pytest.mark.timeout(10)
+def test_cloudpickle_process_manager():
+    def clousure_task():
+        return "done"
+
+    async def async_clousure_task():
+        return "done"
+
+    lambda_task = lambda x: x  # noqa: E731
+
+    manager_spec = ProcessManagerSpec()
+    manager = ProcessManager(manager_spec)
+    manager.start()
+
+    future = manager.submit(clousure_task)
+    assert future.result() == "done"
+
+    future = manager.submit(async_clousure_task)
+    assert future.result() == "done"
+
+    future = manager.submit(lambda_task, args=("done",))
+    assert future.result() == "done"
+
+    manager.stop()

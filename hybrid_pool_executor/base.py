@@ -157,6 +157,7 @@ class Future(_Future):
         self.add_done_callback(cb)
 
     async def _async_result(self):
+        # TODO: better implementation besides sleep
         while not self._got:
             await asyncio.sleep(0.01)
         return self.result()

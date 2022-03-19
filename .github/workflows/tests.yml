@@ -25,7 +25,9 @@ jobs:
         os:
           - "ubuntu-20.04"
         toxenv:
+          - "black"
           - "flake8"
+          - "isort"
         include:
           - python-version: "3.8"
             os: "ubuntu-20.04"
@@ -36,10 +38,10 @@ jobs:
           - python-version: "3.10"
             os: "ubuntu-20.04"
             toxenv: "py310"
-          - python-version: 3.8
+          - python-version: "3.8"
             os: "macos-latest"
             toxenv: "py38"
-          - python-version: 3.8
+          - python-version: "3.8"
             os: "windows-latest"
             toxenv: "py38"
 

@@ -4,7 +4,7 @@ import multiprocessing as mp
 import typing as t
 from dataclasses import dataclass, field
 from functools import partial
-from multiprocessing import Process, Queue, Value
+from multiprocessing import Process, Value
 from queue import Empty
 from threading import Event, ThreadError
 from time import monotonic
@@ -19,7 +19,6 @@ from hybrid_pool_executor.base import (
     CancelledError,
     Function,
     Future,
-    ModuleSpec,
 )
 from hybrid_pool_executor.constants import (
     ACT_CLOSE,
@@ -37,6 +36,7 @@ from hybrid_pool_executor.utils import (
     isasync,
     rectify,
 )
+from hybrid_pool_executor.workers.process.queue import Queue
 
 
 @dataclass
@@ -471,14 +471,3 @@ class ProcessManager(BaseManager):
             worker = ProcessWorker(self.get_worker_spec())
             self._current_workers[worker._name] = worker
             worker.start()
-
-
-MODULE_SPEC = ModuleSpec(
-    name="process",
-    manager_class=ProcessManager,
-    manager_spec_class=ProcessManagerSpec,
-    worker_class=ProcessWorker,
-    worker_spec_class=ProcessWorkerSpec,
-    tags=frozenset({"process", "thread", "async"}),
-    enabled=True,
-)

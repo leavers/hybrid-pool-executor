@@ -1,6 +1,4 @@
 import atexit
-import importlib
-import os
 import time
 import typing as t
 import weakref
@@ -9,13 +7,13 @@ from hybrid_pool_executor.base import (
     BaseExecutor,
     BaseManager,
     BaseManagerSpec,
-    ExistsError,
     Future,
     ModuleSpec,
     NotSupportedError,
 )
 from hybrid_pool_executor.constants import Function
-from hybrid_pool_executor.utils import SingletonMeta, isasync
+from hybrid_pool_executor.spec import ModuleSpecFactory, spec_factory
+from hybrid_pool_executor.utils import isasync
 
 _all_executors = weakref.WeakSet()
 
@@ -27,72 +25,6 @@ def _python_exit():
             executor.shutdown()
 
 
-class ModuleSpecFactory(metaclass=SingletonMeta):
-    def __init__(self):
-        self._specs: t.Dict[str, ModuleSpec] = {}
-        self._tag_index: t.Dict[str, t.Set[str]] = {}
-        # load default module specs
-        self._import_default()
-
-    def import_spec(self, spec: ModuleSpec):
-        name = spec.name
-        if name in self._specs:
-            raise ExistsError(f'Found duplicated spec "{name}".')
-        self._specs[name] = spec
-        for tag in spec.tags:
-            if tag not in self._tag_index:
-                self._tag_index[tag] = set()
-            index = self._tag_index[tag]
-            index.add(name)
-
-    def import_module(self, module: str):
-        module_spec: ModuleSpec = t.cast(
-            ModuleSpec, importlib.import_module(module).MODULE_SPEC
-        )
-        self.import_spec(module_spec)
-
-    def _import_default(self):
-        package_name = "workers"
-        currdir = os.path.dirname(os.path.abspath(__file__))
-        package = os.path.basename(currdir)
-        package_path = os.path.join(currdir, package_name)
-        for item in os.listdir(package_path):
-            if item.startswith("_") or not item.endswith(".py"):
-                continue
-            if not os.path.isfile(os.path.join(package_path, item)):
-                continue
-            self.import_module(".".join([package, package_name, item[:-3]]))
-
-    def filter_by_tags(self, *tags: str) -> t.Optional[t.FrozenSet[str]]:
-        if not tags:
-            return frozenset()
-        filter = set()
-        for tag in tags:
-            index = self._tag_index.get(tag)
-            if not index:
-                return frozenset()
-            if not filter:
-                filter |= index
-            else:
-                filter &= index
-        return frozenset(filter)
-
-    def __contains__(self, name: str) -> bool:
-        return name in self._specs
-
-    def __getitem__(self, name: str):
-        return self._specs[name]
-
-    def get(self, name: str):
-        return self._specs.get(name)
-
-    def pop(self, name: str, default=None):
-        return self._specs.pop(name, default)
-
-
-module_spec_factory = ModuleSpecFactory()
-
-
 class HybridPoolExecutor(BaseExecutor):
     def __init__(
         self,
@@ -102,7 +34,7 @@ class HybridPoolExecutor(BaseExecutor):
         redirect_thread: t.Optional[str] = None,
         **kwargs,
     ):
-        self._module_specs: ModuleSpecFactory = module_spec_factory
+        self._module_specs: ModuleSpecFactory = spec_factory
         self._managers: t.Dict[str, BaseManager] = {}
         self._manager_kwargs = {
             "thread_workers": thread_workers,
