@@ -1,5 +1,3 @@
-import asyncio
-import threading
 import typing as t
 from abc import ABC, abstractmethod
 from concurrent.futures._base import CancelledError as BaseCancelledError
