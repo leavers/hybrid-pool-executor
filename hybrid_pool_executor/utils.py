@@ -77,6 +77,19 @@ class SingletonMeta(type):
         return _singleton_instances[cls]
 
 
+def get_event_loop(
+    loop: t.Optional[asyncio.AbstractEventLoop] = None,
+) -> asyncio.AbstractEventLoop:
+    if loop:
+        return loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
+
 class AsyncToSync:
     def __init__(self, fn, /, *args, **kwargs):
         self.fn = fn
@@ -90,12 +103,7 @@ class AsyncToSync:
             return self.fn(*self.args, **self.kwargs)
         if self.is_func:
             self.fn = self.fn(*self.args, **self.kwargs)
-        if not loop:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+        loop = get_event_loop(loop)
         if loop.is_running():
             raise RuntimeError("Unable to execute when loop is already running.")
         return loop.run_until_complete(self.fn)

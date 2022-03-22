@@ -1,13 +1,13 @@
-import asyncio
 import typing as t
 from abc import ABC, abstractmethod
 from concurrent.futures._base import CancelledError as BaseCancelledError
 from concurrent.futures._base import Executor
-from concurrent.futures._base import Future as _Future
+from concurrent.futures._base import Future as BaseFuture
 from dataclasses import dataclass, field
 from queue import SimpleQueue
 
 from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
+from hybrid_pool_executor.utils import get_event_loop
 
 """
 For python 3.7+, there is no significant speed/size difference between object,
@@ -146,20 +146,21 @@ class BaseWorker(ABC):
         pass
 
 
-class Future(_Future):
+class Future(BaseFuture):
     def __init__(self):
         super().__init__()
-        self._got: bool = False
+        self._loop = get_event_loop()
+        self._async_fut = self._loop.create_future()
 
         def cb(_):
-            self._got = True
+            self._async_fut.get_loop().call_soon_threadsafe(
+                self._async_fut.set_result, True
+            )
 
         self.add_done_callback(cb)
 
     async def _async_result(self):
-        # TODO: better implementation besides sleep
-        while not self._got:
-            await asyncio.sleep(0.01)
+        await self._async_fut
         return self.result()
 
     def __await__(self):

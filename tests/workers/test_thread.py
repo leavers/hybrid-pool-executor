@@ -139,6 +139,9 @@ def test_thread_worker_max_error():
     with pytest.raises(RuntimeError, match="error"):
         _ = task.future.result()
 
+    # wait for worker shutting down
+    time.sleep(0.25)
+
     assert not worker.is_alive()
 
 
@@ -168,6 +171,9 @@ def test_thread_worker_cons_error():
     worker_spec.task_bus.put(task)
     with pytest.raises(RuntimeError, match="error"):
         _ = task.future.result()
+
+    # wait for worker shutting down
+    time.sleep(0.25)
 
     assert not worker.is_alive()
 
