@@ -1,9 +1,14 @@
 import importlib
-import os
 import typing as t
 
 from hybrid_pool_executor.base import ExistsError, ModuleSpec
 from hybrid_pool_executor.utils import SingletonMeta
+
+_default_modules = [
+    "hybrid_pool_executor.workers.async_",
+    "hybrid_pool_executor.workers.process",
+    "hybrid_pool_executor.workers.thread",
+]
 
 
 class ModuleSpecFactory(metaclass=SingletonMeta):
@@ -31,28 +36,8 @@ class ModuleSpecFactory(metaclass=SingletonMeta):
         self.import_spec(module_spec)
 
     def _import_default(self):
-        currdir = os.path.dirname(os.path.abspath(__file__))
-        package = os.path.basename(currdir)
-        package_paths = [os.path.join(currdir, "workers")]
-        while package_paths:
-            package_path = package_paths.pop(0)
-            package_name = package_path[len(currdir) + 1 :].replace(os.sep, ".")
-            for item in os.listdir(package_path):
-                qualified_path = os.path.join(package_path, item)
-                if os.path.isdir(qualified_path):
-                    package_paths.append(qualified_path)
-                elif os.path.isfile(qualified_path):
-                    if not item.endswith(".py"):
-                        continue
-                    try:
-                        if item == "__init__.py":
-                            self.import_module(".".join([package, package_name]))
-                        else:
-                            self.import_module(
-                                ".".join([package, package_name, item[:-3]])
-                            )
-                    except (ImportError, AttributeError):
-                        pass
+        for module in _default_modules:
+            self.import_module(module)
 
     def filter_by_tags(self, *tags: str) -> t.Optional[t.FrozenSet[str]]:
         if not tags:
