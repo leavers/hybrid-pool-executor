@@ -128,7 +128,7 @@ class HybridPoolExecutor(BaseExecutor):
             )
         mode = modes.__iter__().__next__()
         manager = self._managers.get(mode)
-        if not manager:
+        if not manager or not manager.is_alive():
             module_spec: ModuleSpec = self._module_specs[mode]
             manager = self._get_manager(
                 mode=mode,
