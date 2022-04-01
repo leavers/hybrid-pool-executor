@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import time
 import weakref
 from random import random
@@ -88,6 +89,11 @@ def test_async_worker_error():
 
     ref = weakref.ref(worker)
     del worker_spec, worker, task
+
+    # it costs more time to clean up on Windows/MacOS
+    if sys.platform != "linux":
+        time.sleep(1)
+
     assert ref() is None
 
 
