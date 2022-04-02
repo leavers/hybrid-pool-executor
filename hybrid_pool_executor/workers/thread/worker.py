@@ -190,6 +190,7 @@ class ThreadWorker(BaseWorker):
         state["running"] = False
         if response is not None and response.flag != ACT_NONE:
             response_bus.put(response)
+        self._thread = None
 
     def stop(self):
         self._state["running"] = False
@@ -217,6 +218,7 @@ class ThreadManagerSpec(BaseManagerSpec):
     name_pattern: str = "ThreadManager-{manager_seq}"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
+    idle_timeout: float = 60.0
     worker_name_pattern: str = "ThreadWorker-{worker} [{manager}]"
     task_name_pattern: str = "ThreadTask-{task} [{manager}]"
     default_worker_spec: ThreadWorkerSpec = field(
@@ -268,12 +270,21 @@ class ThreadManager(BaseManager):
 
         metronome = Event()
         wait_interval: float = rectify(coalesce(self._spec.wait_interval, 0.1), 0.1)
+        idle_timeout: float = rectify(coalesce(self._spec.idle_timeout, 60), 60)
         num_process_limit: int = rectify(
             coalesce(self._spec.max_processing_responses_per_iteration, -1), -1
         )
+        current_tasks = self._current_tasks
         consume_response = self._consume_response
         response_bus = self._response_bus
+
+        idle_tick = monotonic()
         while True:
+            if not current_tasks and response_bus.empty():
+                if monotonic() - idle_tick > idle_timeout:
+                    break
+            else:
+                idle_tick = monotonic()
             if not state["running"]:
                 break
 
@@ -285,9 +296,12 @@ class ThreadManager(BaseManager):
                     break
             if num_processed == 0:
                 metronome.wait(wait_interval)
+
+        state["running"] = False
         while not response_bus.empty():
             consume_response()
         self._stop_all_workers()
+        self._thread = None
 
     def _stop_all_workers(self):
         stop_action = Action(ACT_CLOSE)

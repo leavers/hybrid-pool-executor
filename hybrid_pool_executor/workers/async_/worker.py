@@ -234,6 +234,7 @@ class AsyncWorker(BaseWorker):
         while not async_response_bus.empty():
             response = await async_response_bus.get()
             response_bus.put(response)
+        self._thread = None
 
     def _run(self):
         self._loop = asyncio.new_event_loop()
@@ -266,6 +267,7 @@ class AsyncManagerSpec(BaseManagerSpec):
     name_pattern: str = "AsyncManager-{manager_seq}"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
+    idle_timeout: float = 60.0
     worker_name_pattern: str = "AsyncWorker-{worker} [{manager}]"
     task_name_pattern: str = "AsyncTask-{task} [{manager}]"
     default_worker_spec: AsyncWorkerSpec = field(
@@ -317,11 +319,20 @@ class AsyncManager(BaseManager):
 
         metronome = Event()
         wait_interval: float = rectify(coalesce(self._spec.wait_interval, 0.1), 0.1)
+        idle_timeout: float = rectify(coalesce(self._spec.idle_timeout, 60), 60)
         num_process_limit: int = rectify(
             coalesce(self._spec.max_processing_responses_per_iteration, -1), -1
         )
+        current_tasks = self._current_tasks
         response_bus = self._response_bus
+
+        idle_tick = monotonic()
         while True:
+            if not current_tasks and response_bus.empty():
+                if monotonic() - idle_tick > idle_timeout:
+                    break
+            else:
+                idle_tick = monotonic()
             if not state["running"]:
                 break
 
@@ -333,9 +344,12 @@ class AsyncManager(BaseManager):
                     break
             if num_processed == 0:
                 metronome.wait(wait_interval)
+
+        state["running"] = False
         while not response_bus.empty():
             self._consume_response()
         self._stop_all_workers()
+        self._thread = None
 
     def _stop_all_workers(self):
         stop_action = Action(ACT_CLOSE)
