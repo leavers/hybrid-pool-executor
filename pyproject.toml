@@ -1,3 +1,8 @@
+# [project]
+# ...
+# NOTE: setuptools' support for extra_requires is not yet stable:
+#       https://setuptools.pypa.io/en/latest/userguide/dependency_management.html
+
 [build-system]
 requires = ["setuptools", "wheel"]
 
@@ -20,6 +25,17 @@ parallel = true
 show_missing = true
 exclude_lines = ["pragma: nocover"]
 
-# mock setting(s) of flake8 (in tox.ini currently)
-#[flake8]
-#max-line-length = 88
+[tool.flake8]
+max-line-length = 88
+extend-ignore = "E203,"
+
+[tool.autoflake]
+in-place = true
+recursive = true
+remove-all-unused-imports = true
+ignore-init-module-imports = true
+remove-duplicate-keys = true
+remove-unused-variables = true
+
+[tool.mypy]
+ignore_missing_imports = true
