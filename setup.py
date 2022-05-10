@@ -19,13 +19,17 @@ extra_require = [
 tests_require = [
     "black",
     "coverage[toml]>=5.3",
-    "flake8",
     "isort>=5.0.0",
+    "mypy",
+    "pyproject-autoflake",
+    "pyproject-flake8",
     "pytest>=6.2.5",
     "pytest-asyncio",
     "pytest-timeout",
 ]
 dev_require = tests_require + [
+    "sphinx",
+    "sphinx-rtd-theme",
     "tox",
 ]
 extras_require = {
