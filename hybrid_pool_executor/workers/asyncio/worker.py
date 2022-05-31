@@ -14,7 +14,7 @@ from hybrid_pool_executor.constants import (
     ACT_RESET,
     ACT_RESTART,
 )
-from hybrid_pool_executor.utils import coalesce, isasync, rectify
+from hybrid_pool_executor.utils import isasync
 from hybrid_pool_executor.workers.thread.worker import (
     ThreadManager,
     ThreadManagerSpec,
@@ -28,7 +28,7 @@ NoneType = type(None)
 
 @dataclass
 class AsyncTask(ThreadTask):
-    future: Future = field(default_factory=Future)
+    pass
 
 
 @dataclass
@@ -41,9 +41,10 @@ class AsyncWorker(ThreadWorker):
     def __init__(self, spec: AsyncWorkerSpec):
         super().__init__(spec=t.cast(ThreadWorkerSpec, spec))
         self._spec = t.cast(AsyncWorkerSpec, self._spec)
+
         self._loop: t.Optional[asyncio.AbstractEventLoop] = None
         self._async_tasks: t.Dict[str, asyncio.Task] = {}
-        self._current_tasks: t.Dict[str, AsyncTask] = {}
+        self._curr_tasks: t.Dict[str, AsyncTask] = {}
 
     @property
     def name(self) -> str:
@@ -103,13 +104,13 @@ class AsyncWorker(ThreadWorker):
         task_count: int = 0
         err_count: int = 0
         cons_err_count: int = 0
-        current_coroutines: int = 0
+        curr_coroutines: int = 0
         is_prev_coro_err: bool = False
 
         response = None
         idle_tick = monotonic()
         while True:
-            if current_coroutines > 0:
+            if curr_coroutines > 0:
                 state.idle = False
                 idle_tick = monotonic()
             else:
@@ -157,14 +158,14 @@ class AsyncWorker(ThreadWorker):
                         async_tasks[task.name] = async_task
                         del task
                     task_count += 1
-                    current_coroutines += 1
+                    curr_coroutines += 1
             except Empty:
                 pass
             await asyncio.sleep(0)  # ugly but works
             while not async_response_bus.empty():
                 response = await async_response_bus.get()
                 await async_tasks.pop(response.task_name)
-                current_coroutines -= 1
+                curr_coroutines -= 1
                 if response.match(ACT_EXCEPTION):
                     err_count += 1
                     if is_prev_coro_err:
@@ -214,6 +215,7 @@ class AsyncManagerSpec(ThreadManagerSpec):
     worker_name_pattern: str = "AsyncWorker-{worker} [{manager}]"
     task_name_pattern: str = "AsyncTask-{task} [{manager}]"
     num_workers: int = 1
+    task_class: t.Type[AsyncTask] = AsyncTask
     worker_class: t.Type[AsyncWorker] = AsyncWorker
     default_worker_spec: AsyncWorkerSpec = field(
         default_factory=partial(AsyncWorkerSpec, name="DefaultWorkerSpec")
@@ -235,44 +237,18 @@ class AsyncManager(ThreadManager):
         max_err_count: t.Optional[int] = None,
         max_cons_err_count: t.Optional[int] = None,
     ) -> AsyncWorkerSpec:
-        if name and name in self._current_tasks:
-            raise KeyError(f'Worker "{name}" exists.')
-        worker_spec = AsyncWorkerSpec(
-            name=coalesce(
-                name,
-                self._spec.worker_name_pattern.format(
-                    manager=self._name,
-                    worker=self._next_worker_seq(),
-                ),
-            ),
-            task_bus=self._task_bus,
-            request_bus=SimpleQueue(),
-            response_bus=self._response_bus,
-            daemon=coalesce(daemon, self._default_worker_spec.daemon),
-            idle_timeout=rectify(
-                coalesce(idle_timeout, self._default_worker_spec.idle_timeout),
-                self._default_worker_spec.idle_timeout,
-            ),
-            wait_interval=rectify(
-                coalesce(wait_interval, self._default_worker_spec.wait_interval),
-                self._default_worker_spec.wait_interval,
-            ),
-            max_task_count=rectify(
-                coalesce(max_task_count, self._default_worker_spec.max_task_count),
-                self._default_worker_spec.max_task_count,
-            ),
-            max_err_count=rectify(
-                coalesce(max_err_count, self._default_worker_spec.max_err_count),
-                self._default_worker_spec.max_err_count,
-            ),
-            max_cons_err_count=rectify(
-                coalesce(
-                    max_cons_err_count, self._default_worker_spec.max_cons_err_count
-                ),
-                self._default_worker_spec.max_cons_err_count,
+        return t.cast(
+            AsyncWorkerSpec,
+            super().get_worker_spec(
+                name=name,
+                daemon=daemon,
+                idle_timeout=idle_timeout,
+                wait_interval=wait_interval,
+                max_task_count=max_task_count,
+                max_err_count=max_err_count,
+                max_cons_err_count=max_cons_err_count,
             ),
         )
-        return worker_spec
 
     def submit(
         self,
@@ -281,25 +257,8 @@ class AsyncManager(ThreadManager):
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
     ) -> Future:
-        if not self._state.running:
-            raise RuntimeError(
-                f'{self.__class__.__name__} "{self._name}" is either stopped or not '
-                "started yet and not able to accept tasks."
-            )
         if not isasync(fn):
             raise TypeError(
                 f'Param "fn" ({fn}) is neither a coroutine nor a coroutine function.'
             )
-        name = self._get_task_name(name)
-        future = Future()
-        task = AsyncTask(
-            name=name,
-            fn=fn,
-            args=args or (),
-            kwargs=kwargs or {},
-            future=future,
-        )
-        self._current_tasks[name] = task
-        self._task_bus.put(task)
-        self._adjust_workers()
-        return future
+        return super().submit(fn=fn, args=args, kwargs=kwargs, name=name)

@@ -16,6 +16,7 @@ from hybrid_pool_executor.base import (
     BaseWorkerSpec,
     CancelledError,
     Future,
+    adjust_worker_iterator,
 )
 from hybrid_pool_executor.constants import (
     ACT_CLOSE,
@@ -71,7 +72,7 @@ class ThreadWorker(BaseWorker):
         self._spec = dataclasses.replace(spec)
         self._name = self._spec.name
         self._thread: t.Optional[KillableThread] = None
-        self._current_task_name: t.Optional[str] = None
+        self._curr_task_name: t.Optional[str] = None
 
     @property
     def name(self) -> str:
@@ -89,7 +90,7 @@ class ThreadWorker(BaseWorker):
     ):
         return Action(
             flag=flag,
-            task_name=self._current_task_name,
+            task_name=self._curr_task_name,
             worker_name=self._name,
             result=result,
             exception=exception,
@@ -159,7 +160,7 @@ class ThreadWorker(BaseWorker):
             result = None
             try:
                 state.idle = False
-                self._current_task_name = task.name
+                self._curr_task_name = task.name
 
                 # check if order is cancelled
                 if task.cancelled:
@@ -184,7 +185,7 @@ class ThreadWorker(BaseWorker):
                 del task
                 task_count += 1
 
-                self._current_task_name = None
+                self._curr_task_name = None
                 state.idle = True
 
                 idle_tick = monotonic()
@@ -226,9 +227,10 @@ class ThreadManagerSpec(BaseManagerSpec):
     mode: str = "thread"
     name_pattern: str = "ThreadManager-{manager_seq}"
     worker_name_pattern: str = "ThreadWorker-{worker} [{manager}]"
+    task_name_pattern: str = "ThreadTask-{task} [{manager}]"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
-    task_name_pattern: str = "ThreadTask-{task} [{manager}]"
+    task_class: t.Type[ThreadTask] = ThreadTask
     worker_class: t.Type[ThreadWorker] = ThreadWorker
     default_worker_spec: ThreadWorkerSpec = field(
         default_factory=partial(ThreadWorkerSpec, name="DefaultWorkerSpec")
@@ -252,8 +254,8 @@ class ThreadManager(BaseManager):
 
         self._task_bus = SimpleQueue()
         self._response_bus = SimpleQueue()
-        self._current_workers: t.Dict[str, ThreadWorker] = {}
-        self._current_tasks: t.Dict[str, t.Any] = {}
+        self._curr_workers: t.Dict[str, ThreadWorker] = {}
+        self._curr_tasks: t.Dict[str, t.Any] = {}
         self._thread: t.Optional[KillableThread] = None
 
     def start(self):
@@ -282,13 +284,13 @@ class ThreadManager(BaseManager):
         num_process_limit: int = rectify(
             coalesce(self._spec.max_processing_responses_per_iteration, -1), -1
         )
-        current_tasks = self._current_tasks
+        curr_tasks = self._curr_tasks
         consume_response = self._consume_response
         response_bus = self._response_bus
 
         idle_tick = monotonic()
         while True:
-            if not current_tasks and response_bus.empty():
+            if not curr_tasks and response_bus.empty():
                 if monotonic() - idle_tick > idle_timeout:
                     break
             else:
@@ -313,9 +315,9 @@ class ThreadManager(BaseManager):
 
     def _stop_all_workers(self):
         stop_action = Action(ACT_CLOSE)
-        for worker in self._current_workers.values():
+        for worker in self._curr_workers.values():
             worker.spec.request_bus.put(stop_action)
-        for worker in self._current_workers.values():
+        for worker in self._curr_workers.values():
             worker.stop()
 
     def stop(self, timeout: float = 5.0):
@@ -343,9 +345,10 @@ class ThreadManager(BaseManager):
         max_err_count: t.Optional[int] = None,
         max_cons_err_count: t.Optional[int] = None,
     ) -> ThreadWorkerSpec:
-        if name and name in self._current_tasks:
+        if name and name in self._curr_tasks:
             raise KeyError(f'Worker "{name}" exists.')
-        worker_spec = ThreadWorkerSpec(
+        default_spec = self._default_worker_spec
+        return default_spec.__class__(
             name=coalesce(
                 name,
                 self._spec.worker_name_pattern.format(
@@ -356,35 +359,32 @@ class ThreadManager(BaseManager):
             task_bus=self._task_bus,
             request_bus=SimpleQueue(),
             response_bus=self._response_bus,
-            daemon=coalesce(daemon, self._default_worker_spec.daemon),
+            daemon=coalesce(daemon, default_spec.daemon),
             idle_timeout=rectify(
-                coalesce(idle_timeout, self._default_worker_spec.idle_timeout),
-                self._default_worker_spec.idle_timeout,
+                coalesce(idle_timeout, default_spec.idle_timeout),
+                default_spec.idle_timeout,
             ),
             wait_interval=rectify(
-                coalesce(wait_interval, self._default_worker_spec.wait_interval),
-                self._default_worker_spec.wait_interval,
+                coalesce(wait_interval, default_spec.wait_interval),
+                default_spec.wait_interval,
             ),
             max_task_count=rectify(
-                coalesce(max_task_count, self._default_worker_spec.max_task_count),
-                self._default_worker_spec.max_task_count,
+                coalesce(max_task_count, default_spec.max_task_count),
+                default_spec.max_task_count,
             ),
             max_err_count=rectify(
-                coalesce(max_err_count, self._default_worker_spec.max_err_count),
-                self._default_worker_spec.max_err_count,
+                coalesce(max_err_count, default_spec.max_err_count),
+                default_spec.max_err_count,
             ),
             max_cons_err_count=rectify(
-                coalesce(
-                    max_cons_err_count, self._default_worker_spec.max_cons_err_count
-                ),
-                self._default_worker_spec.max_cons_err_count,
+                coalesce(max_cons_err_count, default_spec.max_cons_err_count),
+                default_spec.max_cons_err_count,
             ),
         )
-        return worker_spec
 
     def _get_task_name(self, name: t.Optional[str] = None) -> str:
         if name:
-            if name in self._current_tasks:
+            if name in self._curr_tasks:
                 raise KeyError(f'Task "{name}" exists.')
             return name
         return coalesce(
@@ -402,21 +402,17 @@ class ThreadManager(BaseManager):
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
     ) -> Future:
-        if not self._state.running:
-            raise RuntimeError(
-                f'{self.__class__.__name__} "{self._name}" is either stopped or not '
-                "started yet and not able to accept tasks."
-            )
+        self._ensure_running()
         name = self._get_task_name(name)
         future = Future()
-        task = ThreadTask(
+        task = self._spec.task_class(
             name=name,
             fn=fn,
             args=args or (),
             kwargs=kwargs or {},
             future=future,
         )
-        self._current_tasks[name] = task
+        self._curr_tasks[name] = task
         self._task_bus.put(task)
         self._adjust_workers()
         return future
@@ -426,42 +422,25 @@ class ThreadManager(BaseManager):
         response.task_name = t.cast(str, response.task_name)
         response.worker_name = t.cast(str, response.worker_name)
         if response.match(ACT_DONE, ACT_EXCEPTION):
-            self._current_tasks.pop(response.task_name)
+            self._curr_tasks.pop(response.task_name)
         if response.match(ACT_CLOSE):
-            self._current_workers.pop(response.worker_name)
+            self._curr_workers.pop(response.worker_name)
         elif response.match(ACT_RESTART):
-            worker = self._current_workers[response.worker_name]
+            worker = self._curr_workers[response.worker_name]
             worker.stop()
             worker.start()
-
-    def _adjust_iterator(self) -> range:
-        if self._spec.incremental or self._spec.num_workers < 0:
-            qsize = self._task_bus.qsize()
-            num_idle_workers: int = sum(
-                1 if w.is_idle() else 0 for w in self._current_workers.values()
-            )
-            if self._spec.num_workers < 0:
-                iterator = range(qsize - num_idle_workers)
-            else:
-                num_curr_workers: int = len(self._current_workers)
-                iterator = range(
-                    num_curr_workers,
-                    min(
-                        self._spec.num_workers,
-                        num_curr_workers + qsize - num_idle_workers,
-                    ),
-                )
-        else:
-            iterator = range(len(self._current_workers), self._spec.num_workers)
-        return iterator
 
     def _adjust_workers(self):
         # return if the number of workers already meets requirements
         # works on both incremental and static mode
-        if len(self._current_workers) == self._spec.num_workers:
+        if len(self._curr_workers) == self._spec.num_workers:
             return
         # if more workers are needed, create them
-        for _ in self._adjust_iterator():
+        for _ in adjust_worker_iterator(
+            spec=self._spec,
+            curr_workers=self._curr_workers.values(),
+            num_curr_tasks=self._task_bus.qsize(),
+        ):
             worker = self._worker_class(self.get_worker_spec())
-            self._current_workers[worker._name] = worker
+            self._curr_workers[worker._name] = worker
             worker.start()

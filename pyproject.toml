@@ -28,6 +28,8 @@ exclude_lines = ["pragma: nocover"]
 [tool.flake8]
 max-line-length = 88
 extend-ignore = "E203,"
+# better to use whitelist: "exclude" makes flake8 process a huge amount of files
+# exclude = [".git", "__pycache__", "build", "dist"]
 
 [tool.autoflake]
 in-place = true

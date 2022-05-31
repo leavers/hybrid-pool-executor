@@ -4,7 +4,6 @@ from concurrent.futures._base import CancelledError as BaseCancelledError
 from concurrent.futures._base import Executor
 from concurrent.futures._base import Future as BaseFuture
 from dataclasses import dataclass, field
-from queue import SimpleQueue
 from typing import overload
 
 from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
@@ -133,6 +132,13 @@ class BaseWorker(ABC):
     def is_idle(self) -> bool:
         return self._state.idle if self._state.running else False
 
+    def _ensure_running(self) -> None:
+        if not self._state.running:
+            raise RuntimeError(
+                f'{self.__class__.__name__} "{self._name}" is either stopped or not '
+                "started yet and not able to accept tasks."
+            )
+
     @abstractmethod
     def start(self):
         pass
@@ -191,6 +197,7 @@ class BaseManagerSpec(ABC):
     mode: str
     name_pattern: str
     worker_name_pattern: str
+    task_name_pattern: str
     num_workers: int = -1
     incremental: bool = True
     wait_interval: float = 0.1
@@ -202,7 +209,7 @@ class BaseManager(BaseWorker):
     @overload
     def submit(
         self,
-        coro: t.Coroutine[t.Any, t.Any, t.Any],
+        fn: t.Coroutine[t.Any, t.Any, t.Any],
         name: t.Optional[str] = None,
     ) -> Future:
         pass
@@ -216,6 +223,29 @@ class BaseManager(BaseWorker):
         name: t.Optional[str] = None,
     ) -> Future:
         pass
+
+
+def adjust_worker_iterator(
+    spec: BaseManagerSpec,
+    curr_workers: t.Iterable[BaseWorker],
+    num_curr_tasks: int,
+) -> range:
+    if spec.incremental or spec.num_workers < 0:
+        num_idle_workers: int = sum(1 if w.is_idle() else 0 for w in curr_workers)
+        if spec.num_workers < 0:
+            iterator = range(num_curr_tasks - num_idle_workers)
+        else:
+            num_curr_workers: int = len(curr_workers)
+            iterator = range(
+                num_curr_workers,
+                min(
+                    spec.num_workers,
+                    num_curr_workers + num_curr_tasks - num_idle_workers,
+                ),
+            )
+    else:
+        iterator = range(len(curr_workers), spec.num_workers)
+    return iterator
 
 
 @dataclass

@@ -19,6 +19,7 @@ from hybrid_pool_executor.base import (
     CancelledError,
     Function,
     Future,
+    adjust_worker_iterator,
 )
 from hybrid_pool_executor.constants import (
     ACT_CLOSE,
@@ -58,6 +59,7 @@ class ProcessWorkerSpec(BaseWorkerSpec):
 class ProcessWorker(BaseWorker):
     def __init__(self, spec: ProcessWorkerSpec):
         self._spec = dataclasses.replace(spec)
+        # TODO: change process name in system monitor
         self._name = self._spec.name
 
         self._inited = mp.Event()
@@ -65,7 +67,7 @@ class ProcessWorker(BaseWorker):
         self._idle = mp.Event()
 
         self._process: t.Optional[Process] = None
-        self._current_task_name: t.Optional[str] = None
+        self._curr_task_name: t.Optional[str] = None
 
     @property
     def name(self) -> str:
@@ -114,7 +116,7 @@ class ProcessWorker(BaseWorker):
         running.set()
 
         worker_name = spec.name
-        current_task_name: t.Optional[str] = None
+        curr_task_name: t.Optional[str] = None
 
         def get_response(
             flag: ActionFlag = ACT_NONE,
@@ -123,7 +125,7 @@ class ProcessWorker(BaseWorker):
         ) -> Action:
             return Action(
                 flag=flag,
-                task_name=current_task_name,
+                task_name=curr_task_name,
                 worker_name=worker_name,
                 result=result,
                 exception=exception,
@@ -170,7 +172,7 @@ class ProcessWorker(BaseWorker):
             result = None
             try:
                 idle.clear()
-                current_task_name = task.name
+                curr_task_name = task.name
 
                 # check if future is cancelled
                 if task.cancelled:
@@ -193,7 +195,7 @@ class ProcessWorker(BaseWorker):
                 del task
                 task_count += 1
 
-                current_task_name = None
+                curr_task_name = None
                 idle.set()
 
                 idle_tick = monotonic()
@@ -230,11 +232,13 @@ class ProcessWorker(BaseWorker):
 class ProcessManagerSpec(BaseManagerSpec):
     mode: str = "process"
     name_pattern: str = "ProcessManager-{manager_seq}"
+    worker_name_pattern: str = "ProcessWorker-{worker} [{manager}]"
+    task_name_pattern: str = "ProcessTask-{task} [{manager}]"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
     idle_timeout: float = 60.0
-    worker_name_pattern: str = "ProcessWorker-{worker} [{manager}]"
-    task_name_pattern: str = "ProcessTask-{task} [{manager}]"
+    task_class: t.Type[ProcessTask] = ProcessTask
+    worker_class: t.Type[ProcessWorker] = ProcessWorker
     default_worker_spec: ProcessWorkerSpec = field(
         default_factory=partial(ProcessWorkerSpec, name="DefaultWorkerSpec")
     )
@@ -246,8 +250,8 @@ class ProcessManager(BaseManager):
     def __init__(self, spec: ProcessManagerSpec):
         super().__init__()
         self._spec = dataclasses.replace(spec)
+        self._worker_class = self._spec.worker_class
         self._default_worker_spec = dataclasses.replace(spec.default_worker_spec)
-
         self._name = self._spec.name_pattern.format(
             manager_seq=self._next_manager_seq()
         )
@@ -258,8 +262,8 @@ class ProcessManager(BaseManager):
         self._task_bus = Queue()
         self._task_bus_qsize = Value("L", 0)
         self._response_bus = Queue()
-        self._current_workers: t.Dict[str, ProcessWorker] = {}
-        self._current_tasks: t.Dict[str, t.Any] = {}
+        self._curr_workers: t.Dict[str, ProcessWorker] = {}
+        self._curr_tasks: t.Dict[str, t.Any] = {}
         self._thread: t.Optional[KillableThread] = None
 
     def start(self):
@@ -286,13 +290,13 @@ class ProcessManager(BaseManager):
         num_process_limit: int = rectify(
             coalesce(self._spec.max_processing_responses_per_iteration, -1), -1
         )
-        current_tasks = self._current_tasks
+        curr_tasks = self._curr_tasks
         consume_response = self._consume_response
         response_bus = self._response_bus
 
         idle_tick = monotonic()
         while True:
-            if not current_tasks and response_bus.empty():
+            if not curr_tasks and response_bus.empty():
                 if monotonic() - idle_tick > idle_timeout:
                     break
             else:
@@ -314,16 +318,16 @@ class ProcessManager(BaseManager):
         #       captured, however this may also block the stop/shutdown procedure,
         #       especially when using "with" statement (blocked on __exit__() until all
         #       result has been sent back). Maybe we need a better implementation.
-        while self._current_tasks:
+        while self._curr_tasks:
             consume_response()
         self._stop_all_workers()
         self._thread = None
 
     def _stop_all_workers(self):
         stop_action = Action(ACT_CLOSE)
-        for worker in self._current_workers.values():
+        for worker in self._curr_workers.values():
             worker.spec.request_bus.put(stop_action)
-        for worker in self._current_workers.values():
+        for worker in self._curr_workers.values():
             worker.stop()
 
     def stop(self, timeout: float = 5.0):
@@ -351,9 +355,10 @@ class ProcessManager(BaseManager):
         max_err_count: t.Optional[int] = None,
         max_cons_err_count: t.Optional[int] = None,
     ) -> ProcessWorkerSpec:
-        if name and name in self._current_tasks:
+        if name and name in self._curr_tasks:
             raise KeyError(f'Worker "{name}" exists.')
-        worker_spec = ProcessWorkerSpec(
+        default_spec = self._default_worker_spec
+        worker_spec = default_spec.__class__(
             name=coalesce(
                 name,
                 self._spec.worker_name_pattern.format(
@@ -365,35 +370,33 @@ class ProcessManager(BaseManager):
             task_bus_qsize=self._task_bus_qsize,
             request_bus=Queue(),
             response_bus=self._response_bus,
-            daemon=coalesce(daemon, self._default_worker_spec.daemon),
+            daemon=coalesce(daemon, default_spec.daemon),
             idle_timeout=rectify(
-                coalesce(idle_timeout, self._default_worker_spec.idle_timeout),
-                self._default_worker_spec.idle_timeout,
+                coalesce(idle_timeout, default_spec.idle_timeout),
+                default_spec.idle_timeout,
             ),
             wait_interval=rectify(
-                coalesce(wait_interval, self._default_worker_spec.wait_interval),
-                self._default_worker_spec.wait_interval,
+                coalesce(wait_interval, default_spec.wait_interval),
+                default_spec.wait_interval,
             ),
             max_task_count=rectify(
-                coalesce(max_task_count, self._default_worker_spec.max_task_count),
-                self._default_worker_spec.max_task_count,
+                coalesce(max_task_count, default_spec.max_task_count),
+                default_spec.max_task_count,
             ),
             max_err_count=rectify(
-                coalesce(max_err_count, self._default_worker_spec.max_err_count),
-                self._default_worker_spec.max_err_count,
+                coalesce(max_err_count, default_spec.max_err_count),
+                default_spec.max_err_count,
             ),
             max_cons_err_count=rectify(
-                coalesce(
-                    max_cons_err_count, self._default_worker_spec.max_cons_err_count
-                ),
-                self._default_worker_spec.max_cons_err_count,
+                coalesce(max_cons_err_count, default_spec.max_cons_err_count),
+                default_spec.max_cons_err_count,
             ),
         )
         return worker_spec
 
     def _get_task_name(self, name: t.Optional[str] = None) -> str:
         if name:
-            if name in self._current_tasks:
+            if name in self._curr_tasks:
                 raise KeyError(f'Task "{name}" exists.')
             return name
         return coalesce(
@@ -411,21 +414,17 @@ class ProcessManager(BaseManager):
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
     ) -> Future:
-        if not self._state.running:
-            raise RuntimeError(
-                f'Manager "{self._name}" is either stopped or not started yet '
-                "and not able to accept tasks."
-            )
+        self._ensure_running()
         name = self._get_task_name(name)
         future = Future()
-        task = ProcessTask(
+        task = self._spec.task_class(
             name=name,
             fn=fn,
             args=args or (),
             kwargs=kwargs or {},
             future=future,
         )
-        self._current_tasks[name] = task
+        self._curr_tasks[name] = task
         # exclude future when sending to other process to reduce size
         self._task_bus.put(dataclasses.replace(task, future=None))
         self._task_bus_qsize.value += 1
@@ -437,47 +436,30 @@ class ProcessManager(BaseManager):
         response.task_name = t.cast(str, response.task_name)
         response.worker_name = t.cast(str, response.worker_name)
         if response.match(ACT_DONE, ACT_EXCEPTION):
-            task: ProcessTask = self._current_tasks.pop(response.task_name)
+            task: ProcessTask = self._curr_tasks.pop(response.task_name)
             task.future = t.cast(Future, task.future)
             if response.match(ACT_DONE):
                 task.future.set_result(response.result)
             else:
                 task.future.set_exception(response.exception)
         if response.match(ACT_CLOSE):
-            self._current_workers.pop(response.worker_name)
+            self._curr_workers.pop(response.worker_name)
         elif response.match(ACT_RESTART):
-            worker = self._current_workers[response.worker_name]
+            worker = self._curr_workers[response.worker_name]
             worker.stop()
             worker.start()
-
-    def _adjust_iterator(self) -> range:
-        if self._spec.incremental or self._spec.num_workers < 0:
-            qsize = self._task_bus_qsize.value
-            num_idle_workers: int = sum(
-                1 if w.is_idle() else 0 for w in self._current_workers.values()
-            )
-            if self._spec.num_workers < 0:
-                iterator = range(qsize - num_idle_workers)
-            else:
-                num_curr_workers: int = len(self._current_workers)
-                iterator = range(
-                    num_curr_workers,
-                    min(
-                        self._spec.num_workers,
-                        num_curr_workers + qsize - num_idle_workers,
-                    ),
-                )
-        else:
-            iterator = range(len(self._current_workers), self._spec.num_workers)
-        return iterator
 
     def _adjust_workers(self):
         # return if the number of workers already meets requirements
         # works on both incremental and static mode
-        if len(self._current_workers) == self._spec.num_workers:
+        if len(self._curr_workers) == self._spec.num_workers:
             return
         # if more workers are needed, create them
-        for _ in self._adjust_iterator():
-            worker = ProcessWorker(self.get_worker_spec())
-            self._current_workers[worker._name] = worker
+        for _ in adjust_worker_iterator(
+            spec=self._spec,
+            curr_workers=self._curr_workers.values(),
+            num_curr_tasks=self._task_bus_qsize.value,
+        ):
+            worker = self._worker_class(self.get_worker_spec())
+            self._curr_workers[worker._name] = worker
             worker.start()
