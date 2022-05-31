@@ -30,6 +30,7 @@ from hybrid_pool_executor.constants import (
 from hybrid_pool_executor.utils import (
     AsyncToSync,
     KillableThread,
+    WeakClassMethod,
     coalesce,
     isasync,
     rectify,
@@ -43,20 +44,32 @@ class ThreadTask(BaseTask):
 
 @dataclass
 class ThreadWorkerSpec(BaseWorkerSpec):
+    """The specification of thread worker.
+
+    :param task_bus: The queue for sending task item.
+    :type task_bus: SimpleQueue
+
+    :param request_bus: The queue for receiving requests from manager.
+    :type request_bus: SimpleQueue
+
+    :param response_bus: The queue for sending responses to manager.
+    :type response_bus: SimpleQueue
+
+    :param daemon: True if worker should be a daemon, defaults to True.
+    :type daemon: bool, optional
+    """
+
+    task_bus: SimpleQueue = field(default_factory=SimpleQueue)
+    request_bus: SimpleQueue = field(default_factory=SimpleQueue)
+    response_bus: SimpleQueue = field(default_factory=SimpleQueue)
     daemon: bool = True
 
 
 class ThreadWorker(BaseWorker):
     def __init__(self, spec: ThreadWorkerSpec):
+        super().__init__()
         self._spec = dataclasses.replace(spec)
         self._name = self._spec.name
-
-        # bare bool vairiable may not be synced when using start()
-        self._state: t.Dict[str, bool] = {
-            "inited": False,
-            "running": False,
-            "idle": False,
-        }
         self._thread: t.Optional[KillableThread] = None
         self._current_task_name: t.Optional[str] = None
 
@@ -67,9 +80,6 @@ class ThreadWorker(BaseWorker):
     @property
     def spec(self) -> ThreadWorkerSpec:
         return self._spec
-
-    def is_alive(self) -> bool:
-        return self._state["running"]
 
     def _get_response(
         self,
@@ -86,24 +96,27 @@ class ThreadWorker(BaseWorker):
         )
 
     def start(self):
-        if self._state["running"] or self._thread is not None:
+        if self._state.running or self._thread is not None:
             raise RuntimeError(
                 f'{self.__class__.__qualname__} "{self._name}" is already started.'
             )
-        self._thread = KillableThread(target=self._run, daemon=self._spec.daemon)
+        self._thread = KillableThread(
+            target=WeakClassMethod(self._run),
+            daemon=self._spec.daemon,
+        )
         self._thread.start()
 
         # Block method until self._run actually starts to avoid creating multiple
         # workers when in high concurrency situation.
         state = self._state
-        while not state["inited"]:
+        while not state.inited:
             pass
 
     def _run(self):
         state = self._state
-        state["running"] = True
-        state["idle"] = True
-        state["inited"] = True
+        state.running = True
+        state.idle = True
+        state.inited = True
 
         spec = self._spec
         get_response = self._get_response
@@ -136,7 +149,7 @@ class ThreadWorker(BaseWorker):
                 if request.match(ACT_CLOSE, ACT_RESTART):
                     response = get_response(request.flag)
                     break
-            if not state["running"]:
+            if not state.running:
                 break
 
             try:
@@ -145,7 +158,7 @@ class ThreadWorker(BaseWorker):
                 continue
             result = None
             try:
-                state["idle"] = False
+                state.idle = False
                 self._current_task_name = task.name
 
                 # check if order is cancelled
@@ -172,7 +185,7 @@ class ThreadWorker(BaseWorker):
                 task_count += 1
 
                 self._current_task_name = None
-                state["idle"] = True
+                state.idle = True
 
                 idle_tick = monotonic()
                 if (
@@ -186,20 +199,20 @@ class ThreadWorker(BaseWorker):
                 response_bus.put(response)
                 response = None
 
-        state["idle"] = False
-        state["running"] = False
+        state.idle = False
+        state.running = False
         if response is not None and response.flag != ACT_NONE:
             response_bus.put(response)
         self._thread = None
 
     def stop(self):
-        self._state["running"] = False
+        self._state.running = False
         if self._thread and self._thread.is_alive():
             self._thread.join()
         self._thread = None
 
     def terminate(self):
-        self._state["running"] = False
+        self._state.running = False
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.terminate()
@@ -207,20 +220,16 @@ class ThreadWorker(BaseWorker):
             pass
         self._thread = None
 
-    def is_idle(self) -> bool:
-        state = self._state
-        return state["idle"] if state["running"] else False
-
 
 @dataclass
 class ThreadManagerSpec(BaseManagerSpec):
     mode: str = "thread"
     name_pattern: str = "ThreadManager-{manager_seq}"
+    worker_name_pattern: str = "ThreadWorker-{worker} [{manager}]"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
-    idle_timeout: float = 60.0
-    worker_name_pattern: str = "ThreadWorker-{worker} [{manager}]"
     task_name_pattern: str = "ThreadTask-{task} [{manager}]"
+    worker_class: t.Type[ThreadWorker] = ThreadWorker
     default_worker_spec: ThreadWorkerSpec = field(
         default_factory=partial(ThreadWorkerSpec, name="DefaultWorkerSpec")
     )
@@ -230,7 +239,9 @@ class ThreadManager(BaseManager):
     _next_manager_seq = itertools.count().__next__
 
     def __init__(self, spec: ThreadManagerSpec):
+        super().__init__()
         self._spec = dataclasses.replace(spec)
+        self._worker_class = self._spec.worker_class
         self._default_worker_spec = dataclasses.replace(spec.default_worker_spec)
         self._name = self._spec.name_pattern.format(
             manager_seq=self._next_manager_seq()
@@ -239,11 +250,6 @@ class ThreadManager(BaseManager):
         self._next_worker_seq = itertools.count().__next__
         self._next_task_seq = itertools.count().__next__
 
-        self._state: t.Dict[str, bool] = {
-            "inited": False,
-            "running": False,
-        }
-
         self._task_bus = SimpleQueue()
         self._response_bus = SimpleQueue()
         self._current_workers: t.Dict[str, ThreadWorker] = {}
@@ -251,22 +257,24 @@ class ThreadManager(BaseManager):
         self._thread: t.Optional[KillableThread] = None
 
     def start(self):
-        if self._state["running"] or self._thread is not None:
-            raise RuntimeError(f'ThreadManager "{self._name}" is already started.')
-        self._thread = KillableThread(target=self._run, daemon=True)
+        if self._state.running or self._thread is not None:
+            raise RuntimeError(
+                f'{self.__class__.__name__} "{self._name}" is already started.'
+            )
+        self._thread = KillableThread(
+            target=WeakClassMethod(self._run),
+            daemon=True,
+        )
         self._thread.start()
 
         state = self._state
-        while not state["inited"]:
+        while not state.inited:
             pass
-
-    def is_alive(self) -> bool:
-        return self._state["running"]
 
     def _run(self):
         state = self._state
-        state["running"] = True
-        state["inited"] = True
+        state.running = True
+        state.inited = True
 
         metronome = Event()
         wait_interval: float = rectify(coalesce(self._spec.wait_interval, 0.1), 0.1)
@@ -285,7 +293,7 @@ class ThreadManager(BaseManager):
                     break
             else:
                 idle_tick = monotonic()
-            if not state["running"]:
+            if not state.running:
                 break
 
             num_processed: int = 0
@@ -297,7 +305,7 @@ class ThreadManager(BaseManager):
             if num_processed == 0:
                 metronome.wait(wait_interval)
 
-        state["running"] = False
+        state.running = False
         while not response_bus.empty():
             consume_response()
         self._stop_all_workers()
@@ -311,13 +319,13 @@ class ThreadManager(BaseManager):
             worker.stop()
 
     def stop(self, timeout: float = 5.0):
-        self._state["running"] = False
+        self._state.running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=rectify(coalesce(timeout, 5.0), 5.0))
         self._thread = None
 
     def terminate(self):
-        self._state["running"] = False
+        self._state.running = False
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.terminate()
@@ -394,10 +402,10 @@ class ThreadManager(BaseManager):
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
     ) -> Future:
-        if not self._state["running"]:
+        if not self._state.running:
             raise RuntimeError(
-                f'Manager "{self._name}" is either stopped or not started yet '
-                "and not able to accept tasks."
+                f'{self.__class__.__name__} "{self._name}" is either stopped or not '
+                "started yet and not able to accept tasks."
             )
         name = self._get_task_name(name)
         future = Future()
@@ -454,6 +462,6 @@ class ThreadManager(BaseManager):
             return
         # if more workers are needed, create them
         for _ in self._adjust_iterator():
-            worker = ThreadWorker(self.get_worker_spec())
+            worker = self._worker_class(self.get_worker_spec())
             self._current_workers[worker._name] = worker
             worker.start()

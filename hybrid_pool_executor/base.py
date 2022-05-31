@@ -5,6 +5,7 @@ from concurrent.futures._base import Executor
 from concurrent.futures._base import Future as BaseFuture
 from dataclasses import dataclass, field
 from queue import SimpleQueue
+from typing import overload
 
 from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
 from hybrid_pool_executor.utils import get_event_loop
@@ -54,6 +55,19 @@ class Action:
 
 
 @dataclass
+class WorkerState:
+    """A dataclass which stores running state of worker.
+
+    A bare bool flag may not be synced in concurrent situation, this is why we need
+    a WorkerState class.
+    """
+
+    inited: bool = False
+    running: bool = False
+    idle: bool = False
+
+
+@dataclass
 class BaseTask(ABC):
     """The base dataclass of task.
 
@@ -71,25 +85,13 @@ class BaseTask(ABC):
 
 @dataclass
 class BaseWorkerSpec(ABC):
-    """The base dataclass of work specification.
+    """The base dataclass of worker specification.
 
     BaseWorkerSpec is regarded as a abstract class and should not be initialized
     directly.
 
     :param name: Name of worker.
     :type name: str
-
-    :param task_bus: The queue for sending task item.
-    :type task_bus: SimpleQueue
-
-    :param request_bus: The queue for receiving requests from manager.
-    :type request_bus: SimpleQueue
-
-    :param response_bus: The queue for sending responses to manager.
-    :type response_bus: SimpleQueue
-
-    :param daemon: True if worker should be a daemon, defaults to True.
-    :type daemon: bool, optional
 
     :param idle_timeout: Second(s) before the worker should exit after being idle,
         defaults to 60.
@@ -114,9 +116,6 @@ class BaseWorkerSpec(ABC):
     """
 
     name: str
-    task_bus: SimpleQueue = field(default_factory=SimpleQueue)
-    request_bus: SimpleQueue = field(default_factory=SimpleQueue)
-    response_bus: SimpleQueue = field(default_factory=SimpleQueue)
     idle_timeout: float = 60.0
     wait_interval: float = 0.1
     max_task_count: int = 12
@@ -125,25 +124,33 @@ class BaseWorkerSpec(ABC):
 
 
 class BaseWorker(ABC):
-    @abstractmethod
-    def __init__(self, spec: BaseWorkerSpec):
-        pass
+    def __init__(self):
+        self._state = WorkerState()
+
+    def is_alive(self) -> bool:
+        return self._state.running
+
+    def is_idle(self) -> bool:
+        return self._state.idle if self._state.running else False
 
     @abstractmethod
     def start(self):
         pass
 
     @abstractmethod
-    def is_idle(self) -> bool:
-        pass
-
-    @abstractmethod
-    def stop(self):
+    def stop(self, timeout: t.Optional[float] = None):
         pass
 
     @abstractmethod
     def terminate(self):
         pass
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
 
 
 class Future(BaseFuture):
@@ -181,25 +188,23 @@ class NotSupportedError(Exception):
 
 @dataclass
 class BaseManagerSpec(ABC):
-    mode: str = "abstract"
+    mode: str
+    name_pattern: str
+    worker_name_pattern: str
     num_workers: int = -1
     incremental: bool = True
     wait_interval: float = 0.1
-    name_pattern: str = "Manager-{manager}"
-    worker_name_pattern: str = "Worker-{worker}"
+    idle_timeout: float = 60.0
 
 
-class BaseManager(ABC):
+class BaseManager(BaseWorker):
     @abstractmethod
-    def __init__(self, spec: BaseManagerSpec):
-        pass
-
-    @abstractmethod
-    def start(self):
-        pass
-
-    @abstractmethod
-    def is_alive(self) -> bool:
+    @overload
+    def submit(
+        self,
+        coro: t.Coroutine[t.Any, t.Any, t.Any],
+        name: t.Optional[str] = None,
+    ) -> Future:
         pass
 
     @abstractmethod
@@ -211,21 +216,6 @@ class BaseManager(ABC):
         name: t.Optional[str] = None,
     ) -> Future:
         pass
-
-    @abstractmethod
-    def stop(self, timeout: t.Optional[float] = None):
-        pass
-
-    @abstractmethod
-    def terminate(self):
-        pass
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
 
 
 @dataclass

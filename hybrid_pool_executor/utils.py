@@ -3,8 +3,10 @@ import ctypes
 import functools
 import inspect
 import typing as t
+import weakref
 from operator import le
 from threading import Lock, Thread
+from types import MethodType
 
 NoneType = type(None)
 T = t.TypeVar("T")
@@ -49,6 +51,7 @@ def _(*args, **kwargs):
 
 iscoroutine = inspect.iscoroutine
 iscoroutinefunction = inspect.iscoroutinefunction
+ismethod = inspect.ismethod
 
 
 def isasync(object: t.Any):
@@ -128,3 +131,14 @@ class KillableThread(Thread):
 
     def terminate(self):
         self.raise_exc(SystemExit)
+
+
+class WeakClassMethod:
+    def __init__(self, method: MethodType) -> None:
+        if not ismethod(method):
+            raise TypeError(f"Object {method} is not a class method")
+        self._cls_ref = weakref.ref(method.__self__)
+        self._name = method.__name__
+
+    def __call__(self, *args, **kwargs) -> t.Any:
+        return getattr(self._cls_ref(), self._name)(*args, **kwargs)

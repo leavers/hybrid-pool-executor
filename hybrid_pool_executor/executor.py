@@ -18,11 +18,13 @@ from hybrid_pool_executor.utils import isasync
 _all_executors = weakref.WeakSet()
 
 
-@atexit.register
 def _python_exit():
     for executor in _all_executors:
         if executor.is_alive():
             executor.shutdown()
+
+
+atexit.register(_python_exit)
 
 
 class HybridPoolExecutor(BaseExecutor):
@@ -43,6 +45,8 @@ class HybridPoolExecutor(BaseExecutor):
             "redirect_thread": redirect_thread,
             **kwargs,
         }
+
+        self._task_counter: int = 0
 
         global _all_executors
         _all_executors.add(self)
@@ -143,7 +147,7 @@ class HybridPoolExecutor(BaseExecutor):
 
     def _guess_mode(
         self,
-        fn: t.Callable[..., t.Any],
+        fn: Function,
         mode: t.Optional[str] = None,
         tags: t.Optional[t.Iterable[str]] = None,
     ) -> t.FrozenSet[str]:

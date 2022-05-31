@@ -32,6 +32,7 @@ from hybrid_pool_executor.constants import (
 from hybrid_pool_executor.utils import (
     AsyncToSync,
     KillableThread,
+    WeakClassMethod,
     coalesce,
     isasync,
     rectify,
@@ -76,6 +77,9 @@ class ProcessWorker(BaseWorker):
 
     def is_alive(self) -> bool:
         return self._running.is_set()
+
+    def is_idle(self) -> bool:
+        return self._idle.is_set()
 
     def start(self):
         if self._running.is_set() or self._process is not None:
@@ -221,9 +225,6 @@ class ProcessWorker(BaseWorker):
             self._process.terminate()
         self._process = None
 
-    def is_idle(self) -> bool:
-        return self._idle.is_set()
-
 
 @dataclass
 class ProcessManagerSpec(BaseManagerSpec):
@@ -243,6 +244,7 @@ class ProcessManager(BaseManager):
     _next_manager_seq = itertools.count().__next__
 
     def __init__(self, spec: ProcessManagerSpec):
+        super().__init__()
         self._spec = dataclasses.replace(spec)
         self._default_worker_spec = dataclasses.replace(spec.default_worker_spec)
 
@@ -253,11 +255,6 @@ class ProcessManager(BaseManager):
         self._next_worker_seq = itertools.count().__next__
         self._next_task_seq = itertools.count().__next__
 
-        self._state: t.Dict[str, bool] = {
-            "inited": False,
-            "running": False,
-        }
-
         self._task_bus = Queue()
         self._task_bus_qsize = Value("L", 0)
         self._response_bus = Queue()
@@ -266,22 +263,22 @@ class ProcessManager(BaseManager):
         self._thread: t.Optional[KillableThread] = None
 
     def start(self):
-        if self._state["running"] or self._thread is not None:
+        if self._state.running or self._thread is not None:
             raise RuntimeError(f'ThreadManager "{self._name}" is already started.')
-        self._thread = KillableThread(target=self._run, daemon=True)
+        self._thread = KillableThread(
+            target=WeakClassMethod(self._run),
+            daemon=True,
+        )
         self._thread.start()
 
         state = self._state
-        while not state["inited"]:
+        while not state.inited:
             pass
-
-    def is_alive(self) -> bool:
-        return self._state["running"]
 
     def _run(self):
         state = self._state
-        state["running"] = True
-        state["inited"] = True
+        state.running = True
+        state.inited = True
 
         metronome = Event()
         wait_interval: float = rectify(coalesce(self._spec.wait_interval, 0.1), 0.1)
@@ -300,7 +297,7 @@ class ProcessManager(BaseManager):
                     break
             else:
                 idle_tick = monotonic()
-            if not state["running"]:
+            if not state.running:
                 break
 
             num_processed: int = 0
@@ -312,7 +309,7 @@ class ProcessManager(BaseManager):
             if num_processed == 0:
                 metronome.wait(wait_interval)
 
-        state["running"] = False
+        state.running = False
         # TODO: this part blocks function to make sure all processes' result be
         #       captured, however this may also block the stop/shutdown procedure,
         #       especially when using "with" statement (blocked on __exit__() until all
@@ -330,13 +327,13 @@ class ProcessManager(BaseManager):
             worker.stop()
 
     def stop(self, timeout: float = 5.0):
-        self._state["running"] = False
+        self._state.running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=rectify(coalesce(timeout, 5.0), 5.0))
         self._thread = None
 
     def terminate(self):
-        self._state["running"] = False
+        self._state.running = False
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.terminate()
@@ -414,7 +411,7 @@ class ProcessManager(BaseManager):
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
     ) -> Future:
-        if not self._state["running"]:
+        if not self._state.running:
             raise RuntimeError(
                 f'Manager "{self._name}" is either stopped or not started yet '
                 "and not able to accept tasks."
