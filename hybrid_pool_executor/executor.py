@@ -91,27 +91,68 @@ class HybridPoolExecutor(BaseExecutor):
         return module_spec.manager_class(manager_spec)
 
     def submit(self, fn: t.Callable[..., t.Any], /, *args, **kwargs) -> Future:
-        mode = kwargs.pop("_mode", None)
-        return self.submit_task(fn, args=args, kwargs=kwargs, mode=mode)
+        return self.submit_task(
+            fn,
+            args=args,
+            kwargs=kwargs,
+            name=kwargs.get("_name"),
+            mode=kwargs.get("_mode"),
+            tags=kwargs.get("_tags"),
+        )
+
+    def apply_async(
+        self,
+        func: t.Callable[..., t.Any],
+        args: t.Iterable[t.Any] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+    ) -> Future:
+        return self.submit(func, *args, **(kwargs or {}))
+
+    # TODO: add multiprocessing.pool-compitable interfaces
+    # def apply(
+    #     self,
+    #     func: t.Callable[..., t.Any],
+    #     args: t.Iterable[t.Any] = (),
+    #     kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+    # ) -> t.Any:
+    #     return self.apply_async(func, args, kwargs).result()
+
+    # def map(
+    #     self,
+    #     func: t.Callable[..., t.Any],
+    #     iterable: t.Iterable[t.Any],
+    #     chunksize: t.Optional[int] = None,
+    # ) -> t.Iterable[t.Any]:
+    #     pass
 
     def map_tasks(
         self,
         fn: t.Callable[..., t.Any],
         *iterables: t.Union[t.Iterable[t.Any], t.Mapping[str, t.Any], t.Any],
         timeout: t.Optional[float] = None,
-    ):
+        mode: t.Optional[str] = None,
+        tags: t.Optional[t.Iterable[str]] = None,
+    ) -> t.Generator[t.Any, None, None]:
         if timeout is not None:
             end_time = timeout + time.monotonic()
         fs = []
         for params in iterables:
             if isinstance(params, t.Mapping):
-                fs.append(self.submit(fn, **params))
+                fs.append(
+                    self.submit_task(
+                        fn=fn,
+                        kwargs=params,
+                        name=params.get("_name"),
+                        mode=params.get("_mode", mode),
+                        tags=params.get("_tags", tags),
+                    )
+                )
             else:
                 if not isinstance(params, t.Iterable):
                     params = [params]
-                fs.append(self.submit(fn, *params))
+                fs.append(self.submit_task(fn=fn, args=params, mode=mode, tags=tags))
 
-        def result_iterator():
+        def result_iterator() -> t.Any:
             try:
                 fs.reverse()
                 while fs:
