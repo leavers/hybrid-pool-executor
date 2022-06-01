@@ -53,7 +53,6 @@ class ProcessWorkerSpec(BaseWorkerSpec):
     request_bus: Queue = field(default_factory=Queue)
     response_bus: Queue = field(default_factory=Queue)
     task_bus_qsize: Value = field(default_factory=partial(Value, "L", 0))
-    max_task_count: int = 1
     daemon: bool = False
 
 
