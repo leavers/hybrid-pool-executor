@@ -45,7 +45,7 @@ class HybridPoolExecutor(BaseExecutor):
         **kwargs,
     ):
         # TODO: incremental/redirect/pattern logic
-        self._module_specs: ModuleSpecFactory = spec_factory
+        self._spec_factory: ModuleSpecFactory = spec_factory
         self._managers: t.Dict[str, BaseManager] = {}
         self._manager_kwargs = {
             "thread_workers": thread_workers,
@@ -108,22 +108,13 @@ class HybridPoolExecutor(BaseExecutor):
     ) -> Future:
         return self.submit(func, *args, **(kwargs or {}))
 
-    # TODO: add multiprocessing.pool-compitable interfaces
-    # def apply(
-    #     self,
-    #     func: t.Callable[..., t.Any],
-    #     args: t.Iterable[t.Any] = (),
-    #     kwargs: t.Optional[t.Dict[str, t.Any]] = None,
-    # ) -> t.Any:
-    #     return self.apply_async(func, args, kwargs).result()
-
-    # def map(
-    #     self,
-    #     func: t.Callable[..., t.Any],
-    #     iterable: t.Iterable[t.Any],
-    #     chunksize: t.Optional[int] = None,
-    # ) -> t.Iterable[t.Any]:
-    #     pass
+    def apply(
+        self,
+        func: t.Callable[..., t.Any],
+        args: t.Iterable[t.Any] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+    ) -> t.Any:
+        return self.submit(func, *args, **(kwargs or {})).result()
 
     def map_tasks(
         self,
@@ -192,7 +183,7 @@ class HybridPoolExecutor(BaseExecutor):
         mode = modes.__iter__().__next__()
         manager = self._managers.get(mode)
         if not manager or not manager.is_alive():
-            module_spec: ModuleSpec = self._module_specs[mode]
+            module_spec: ModuleSpec = self._spec_factory[mode]
             manager = self._get_manager(
                 mode=mode,
                 module_spec=module_spec,
@@ -226,7 +217,7 @@ class HybridPoolExecutor(BaseExecutor):
         tags: t.Optional[t.Iterable[str]] = None,
     ) -> t.FrozenSet[str]:
         if tags:
-            mode_filter = self._module_specs.filter_by_tags(*tags)
+            mode_filter = self._spec_factory.filter_by_tags(*tags)
         else:
             mode_filter = None
         if mode:
