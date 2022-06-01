@@ -1,5 +1,6 @@
 import dataclasses
 import itertools
+import os
 import typing as t
 from dataclasses import dataclass, field
 from functools import partial
@@ -138,7 +139,7 @@ class ThreadWorker(BaseWorker):
 
         idle_tick = monotonic()
         while True:
-            if monotonic() - idle_tick > idle_timeout:
+            if idle_timeout >= 0 and monotonic() - idle_tick > idle_timeout:
                 response = get_response(ACT_CLOSE)
                 break
             while not request_bus.empty():
@@ -236,6 +237,12 @@ class ThreadManagerSpec(BaseManagerSpec):
         default_factory=partial(ThreadWorkerSpec, name="DefaultWorkerSpec")
     )
 
+    def __post_init__(self):
+        if self.num_workers == 0:
+            self.num_workers == os.cpu_count() * 2
+        if self.max_processing_responses_per_iteration == 0:
+            self.max_processing_responses_per_iteration = self.num_workers
+
 
 class ThreadManager(BaseManager):
     _next_manager_seq = itertools.count().__next__
@@ -291,7 +298,7 @@ class ThreadManager(BaseManager):
         idle_tick = monotonic()
         while True:
             if not curr_tasks and response_bus.empty():
-                if monotonic() - idle_tick > idle_timeout:
+                if idle_timeout >= 0 and monotonic() - idle_tick > idle_timeout:
                     break
             else:
                 idle_tick = monotonic()

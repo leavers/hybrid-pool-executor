@@ -115,7 +115,7 @@ class AsyncWorker(ThreadWorker):
                 idle_tick = monotonic()
             else:
                 state.idle = True
-                if monotonic() - idle_tick > idle_timeout:
+                if idle_timeout >= 0 and monotonic() - idle_tick > idle_timeout:
                     response = Action(flag=ACT_CLOSE, worker_name=worker_name)
                     break
             while not request_bus.empty():
