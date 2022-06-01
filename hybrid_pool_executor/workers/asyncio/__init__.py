@@ -1,5 +1,5 @@
 from hybrid_pool_executor.base import ModuleSpec
-from hybrid_pool_executor.workers.async_.worker import (
+from hybrid_pool_executor.workers.asyncio.worker import (
     AsyncManager,
     AsyncManagerSpec,
     AsyncWorker,

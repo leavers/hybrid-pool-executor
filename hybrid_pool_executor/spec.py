@@ -5,7 +5,7 @@ from hybrid_pool_executor.base import ExistsError, ModuleSpec
 from hybrid_pool_executor.utils import SingletonMeta
 
 _default_modules = [
-    "hybrid_pool_executor.workers.async_",
+    "hybrid_pool_executor.workers.asyncio",
     "hybrid_pool_executor.workers.process",
     "hybrid_pool_executor.workers.thread",
 ]

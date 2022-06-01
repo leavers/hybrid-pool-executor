@@ -66,9 +66,14 @@ def test_executor_guess_mode():
     assert len(guess_mode(simple_delay_task, tags=["black hole"])) == 0
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="process spawn on darwin is too slow",
+)
 @pytest.mark.timeout(20 if sys.platform == "linux" else 60)
 @pytest.mark.asyncio
 async def test_executor_high_concurrency():
+    # FIXME: test is unstable on darwin
     futures = {
         "thread": [],
         "process": [],

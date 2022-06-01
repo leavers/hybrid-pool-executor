@@ -18,11 +18,13 @@ from hybrid_pool_executor.utils import isasync
 _all_executors = weakref.WeakSet()
 
 
-@atexit.register
 def _python_exit():
     for executor in _all_executors:
         if executor.is_alive():
             executor.shutdown()
+
+
+atexit.register(_python_exit)
 
 
 class HybridPoolExecutor(BaseExecutor):
@@ -32,8 +34,17 @@ class HybridPoolExecutor(BaseExecutor):
         incremental_thread_workers: bool = True,
         thread_worker_name_pattern: t.Optional[str] = None,
         redirect_thread: t.Optional[str] = None,
+        process_workers: int = -1,
+        incremental_process_workers: bool = True,
+        process_worker_name_pattern: t.Optional[str] = None,
+        redirect_process: t.Optional[str] = None,
+        async_workers: int = -1,
+        incremental_async_workers: bool = True,
+        async_worker_name_pattern: t.Optional[str] = None,
+        redirect_async: t.Optional[str] = None,
         **kwargs,
     ):
+        # TODO: incremental/redirect/pattern logic
         self._module_specs: ModuleSpecFactory = spec_factory
         self._managers: t.Dict[str, BaseManager] = {}
         self._manager_kwargs = {
@@ -41,8 +52,19 @@ class HybridPoolExecutor(BaseExecutor):
             "incremental_thread_workers": incremental_thread_workers,
             "thread_worker_name_pattern": thread_worker_name_pattern,
             "redirect_thread": redirect_thread,
+            "process_workers": process_workers,
+            "incremental_process_workers": incremental_process_workers,
+            "process_worker_name_pattern": process_worker_name_pattern,
+            "redirect_process": redirect_process,
+            "async_workers": async_workers,
+            "incremental_async_workers": incremental_async_workers,
+            "async_worker_name_pattern": async_worker_name_pattern,
+            "redirect_async": redirect_async,
             **kwargs,
         }
+
+        self._last_clear_ts: float = time.monotonic()
+        self._clear_counter: int = 0
 
         global _all_executors
         _all_executors.add(self)
@@ -111,14 +133,14 @@ class HybridPoolExecutor(BaseExecutor):
         name: t.Optional[str] = None,
         mode: t.Optional[str] = None,
         tags: t.Optional[t.Iterable[str]] = None,
-        **ignored,
+        **_,
     ) -> Future:
         modes = self._guess_mode(fn, mode, tags)
         if not modes:
             raise NotSupportedError(
                 (
-                    "No match mode found for task {fn}{name} with requirements: "
-                    '["mode={mode}, tags={tags}"].'
+                    f"No match mode found for task {fn}{name} with requirements: "
+                    f'["mode={mode}, tags={tags}"].'
                 ).format(
                     fn=fn,
                     name=f' "{name}"' if name else "",
@@ -139,11 +161,26 @@ class HybridPoolExecutor(BaseExecutor):
         self._is_alive = True
         if not manager.is_alive():
             manager.start()
+        self._clear_manager_if_needed()
         return manager.submit(fn=fn, args=args, kwargs=kwargs, name=name)
+
+    def _clear_manager_if_needed(self) -> None:
+        self._clear_counter += 1
+        monotonic = time.monotonic()
+        now, prev, self._last_clear_ts = monotonic, self._last_clear_ts, monotonic
+        if self._clear_counter <= 256 and now - prev < 300:
+            return
+        self._clear_counter = 0
+        cleared = []
+        for name, manager in self._managers.items():
+            if not manager.is_alive():
+                cleared.append(name)
+        for name in cleared:
+            self._managers.pop(name)
 
     def _guess_mode(
         self,
-        fn: t.Callable[..., t.Any],
+        fn: Function,
         mode: t.Optional[str] = None,
         tags: t.Optional[t.Iterable[str]] = None,
     ) -> t.FrozenSet[str]:
