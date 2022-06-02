@@ -1,7 +1,7 @@
 import atexit
 import time
 import typing as t
-import weakref
+from weakref import WeakSet
 
 from hybrid_pool_executor.base import (
     BaseExecutor,
@@ -12,10 +12,10 @@ from hybrid_pool_executor.base import (
     NotSupportedError,
 )
 from hybrid_pool_executor.constants import Function
-from hybrid_pool_executor.spec import ModuleSpecFactory, spec_factory
+from hybrid_pool_executor.spec import ModuleSpecRepo, spec_factory
 from hybrid_pool_executor.utils import isasync
 
-_all_executors = weakref.WeakSet()
+_all_executors: WeakSet = WeakSet()
 
 
 def _python_exit():
@@ -42,10 +42,13 @@ class HybridPoolExecutor(BaseExecutor):
         incremental_async_workers: bool = True,
         async_worker_name_pattern: t.Optional[str] = None,
         redirect_async: t.Optional[str] = None,
+        extra_specs: t.Optional[t.Iterable[ModuleSpec]] = None,
         **kwargs,
     ):
-        # TODO: incremental/redirect/pattern logic
-        self._module_specs: ModuleSpecFactory = spec_factory
+        self._spec_repo: ModuleSpecRepo = spec_factory.get_repo()
+        if extra_specs is not None:
+            for spec in extra_specs:
+                self._spec_repo.import_spec(spec, overwrite=True)
         self._managers: t.Dict[str, BaseManager] = {}
         self._manager_kwargs = {
             "thread_workers": thread_workers,
@@ -70,6 +73,10 @@ class HybridPoolExecutor(BaseExecutor):
         _all_executors.add(self)
         self._is_alive: bool = True
 
+    @property
+    def specs(self) -> ModuleSpecRepo:
+        return self._spec_repo
+
     @classmethod
     def _get_manager(
         cls,
@@ -79,7 +86,7 @@ class HybridPoolExecutor(BaseExecutor):
     ) -> BaseManager:
         if (redirect := kwargs.get(f"redirect_{mode}")) is not None:
             mode = redirect
-        manager_spec: BaseManagerSpec = module_spec.manager_spec_class(mode=mode)
+        manager_spec: BaseManagerSpec = module_spec.manager_spec_type()
         if (num_workers := kwargs.get(f"{mode}_workers")) is not None:
             manager_spec.num_workers = num_workers
         if (incremental := kwargs.get(f"incremental_{mode}_workers")) is not None:
@@ -88,30 +95,68 @@ class HybridPoolExecutor(BaseExecutor):
             worker_name_pattern := kwargs.get(f"{mode}_worker_name_pattern")
         ) is not None:
             manager_spec.worker_name_pattern = worker_name_pattern
-        return module_spec.manager_class(manager_spec)
+        return module_spec.manager_type(manager_spec)
 
-    def submit(self, fn: t.Callable[..., t.Any], /, *args, **kwargs) -> Future:
-        mode = kwargs.pop("_mode", None)
-        return self.submit_task(fn, args=args, kwargs=kwargs, mode=mode)
+    def submit(  # type: ignore
+        self,
+        fn: t.Callable[..., t.Any],
+        /,
+        *args,
+        **kwargs,
+    ) -> Future:
+        return self.submit_task(
+            fn,
+            args=args,
+            kwargs=kwargs,
+            name=kwargs.get("_name"),
+            mode=kwargs.get("_mode"),
+            tags=kwargs.get("_tags"),
+        )
+
+    def apply_async(
+        self,
+        func: t.Callable[..., t.Any],
+        args: t.Iterable[t.Any] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+    ) -> Future:
+        return self.submit(func, *args, **(kwargs or {}))
+
+    def apply(
+        self,
+        func: t.Callable[..., t.Any],
+        args: t.Iterable[t.Any] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+    ) -> t.Any:
+        return self.submit(func, *args, **(kwargs or {})).result()
 
     def map_tasks(
         self,
         fn: t.Callable[..., t.Any],
         *iterables: t.Union[t.Iterable[t.Any], t.Mapping[str, t.Any], t.Any],
         timeout: t.Optional[float] = None,
-    ):
+        mode: t.Optional[str] = None,
+        tags: t.Optional[t.Iterable[str]] = None,
+    ) -> t.Generator[t.Any, None, None]:
         if timeout is not None:
             end_time = timeout + time.monotonic()
         fs = []
         for params in iterables:
             if isinstance(params, t.Mapping):
-                fs.append(self.submit(fn, **params))
+                fs.append(
+                    self.submit_task(
+                        fn=fn,
+                        kwargs=t.cast(t.Dict[str, t.Any], params),
+                        name=params.get("_name"),
+                        mode=params.get("_mode", mode),
+                        tags=params.get("_tags", tags),
+                    )
+                )
             else:
                 if not isinstance(params, t.Iterable):
                     params = [params]
-                fs.append(self.submit(fn, *params))
+                fs.append(self.submit_task(fn=fn, args=params, mode=mode, tags=tags))
 
-        def result_iterator():
+        def result_iterator() -> t.Any:
             try:
                 fs.reverse()
                 while fs:
@@ -151,7 +196,7 @@ class HybridPoolExecutor(BaseExecutor):
         mode = modes.__iter__().__next__()
         manager = self._managers.get(mode)
         if not manager or not manager.is_alive():
-            module_spec: ModuleSpec = self._module_specs[mode]
+            module_spec: ModuleSpec = self._spec_repo[mode]
             manager = self._get_manager(
                 mode=mode,
                 module_spec=module_spec,
@@ -185,7 +230,7 @@ class HybridPoolExecutor(BaseExecutor):
         tags: t.Optional[t.Iterable[str]] = None,
     ) -> t.FrozenSet[str]:
         if tags:
-            mode_filter = self._module_specs.filter_by_tags(*tags)
+            mode_filter = self._spec_repo.filter_by_tags(*tags)
         else:
             mode_filter = None
         if mode:

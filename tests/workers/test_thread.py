@@ -5,9 +5,9 @@ from random import random
 
 import pytest
 
+from hybrid_pool_executor.base import Action
 from hybrid_pool_executor.constants import ACT_EXCEPTION, ACT_RESTART
-from hybrid_pool_executor.workers.thread.worker import (
-    Action,
+from hybrid_pool_executor.workers.thread import (
     ThreadManager,
     ThreadManagerSpec,
     ThreadTask,
@@ -26,6 +26,9 @@ def test_thread_worker_task():
         idle_timeout=1,
         max_err_count=1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     task = ThreadTask(name="simple_task", fn=simple_task)
     worker_spec.task_bus.put(task)
 
@@ -54,6 +57,9 @@ def test_thread_worker_async_task():
         idle_timeout=1,
         max_err_count=1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     tasks = []
     for i in range(3):
         task = ThreadTask(name="simple_task", fn=simple_task, args=[i])
@@ -85,6 +91,9 @@ def test_thread_worker_error():
         idle_timeout=1,
         max_err_count=1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     task = ThreadTask(name="simple_error_task", fn=simple_error_task)
     worker_spec.task_bus.put(task)
 
@@ -117,6 +126,9 @@ def test_thread_worker_max_error():
         max_err_count=2,
         max_cons_err_count=-1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
 
     worker = ThreadWorker(worker_spec)
     worker.start()
@@ -156,6 +168,9 @@ def test_thread_worker_cons_error():
         max_err_count=-1,
         max_cons_err_count=2,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
 
     worker = ThreadWorker(worker_spec)
     worker.start()
@@ -200,9 +215,11 @@ async def test_thread_manager_high_concurrency():
         time.sleep(random())
         return v
 
+    # NOTE: The more threads are created, the more time they takes to stop, and the
+    # longer the pytest timeout tolerance is required.
     with ThreadManager(ThreadManagerSpec()) as manager:
         futures = []
-        for i in range(1024):
+        for i in range(64):
             futures.append(manager.submit(simple_task, (i,)))
         for i, future in enumerate(futures):
             assert await future == i

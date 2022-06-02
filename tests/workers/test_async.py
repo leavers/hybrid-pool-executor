@@ -6,9 +6,9 @@ from random import random
 
 import pytest
 
+from hybrid_pool_executor.base import Action
 from hybrid_pool_executor.constants import ACT_EXCEPTION, ACT_RESTART
-from hybrid_pool_executor.workers.asyncio.worker import (
-    Action,
+from hybrid_pool_executor.workers.asyncio import (
     AsyncManager,
     AsyncManagerSpec,
     AsyncTask,
@@ -23,6 +23,9 @@ def test_async_worker_task():
         return "done"
 
     worker_spec = AsyncWorkerSpec(name="TestAsyncWorker", idle_timeout=1)
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     task = AsyncTask(name="simple_task", fn=simple_task)
     worker_spec.task_bus.put(task)
 
@@ -47,6 +50,9 @@ async def test_async_worker_task_async_future():
         return "done"
 
     worker_spec = AsyncWorkerSpec(name="TestAsyncWorker", idle_timeout=1)
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     task = AsyncTask(name="simple_task", fn=simple_task)
     worker_spec.task_bus.put(task)
 
@@ -70,6 +76,9 @@ def test_async_worker_error():
         idle_timeout=1,
         max_err_count=1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     task = AsyncTask(name="simple_error_task", fn=simple_error_task)
     worker_spec.task_bus.put(task)
 
@@ -111,6 +120,9 @@ def test_async_worker_max_error():
         max_err_count=2,
         max_cons_err_count=-1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
 
     worker = AsyncWorker(worker_spec)
     worker.start()
@@ -149,6 +161,9 @@ def test_async_worker_cons_error():
         max_err_count=-1,
         max_cons_err_count=2,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
 
     worker = AsyncWorker(worker_spec)
     worker.start()

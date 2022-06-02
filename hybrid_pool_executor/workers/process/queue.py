@@ -29,7 +29,9 @@ class Queue(BaseQueue):
     def __init__(self, maxsize: int = 0, *, ctx: t.Optional[_ctx.BaseContext] = None):
         if maxsize <= 0:
             # Can raise ImportError (see issues #3770 and #23400)
-            from multiprocessing.synchronize import SEM_VALUE_MAX as maxsize
+            from multiprocessing.synchronize import SEM_VALUE_MAX  # type: ignore
+
+            maxsize = SEM_VALUE_MAX
 
         if not ctx:
             ctx = get_context()
@@ -38,7 +40,7 @@ class Queue(BaseQueue):
         self._reader, self._writer = connection.Pipe(duplex=False)
         self._rlock = ctx.Lock()
         self._opid = os.getpid()
-        self._qsize = Value("L", 0)
+        self._qsize = Value("L", 0)  # type: ignore
         if sys.platform == "win32":
             self._wlock = None
         else:

@@ -8,7 +8,6 @@ from operator import le
 from threading import Lock, Thread
 from types import MethodType
 
-NoneType = type(None)
 T = t.TypeVar("T")
 
 
@@ -44,7 +43,7 @@ def _(
     return fallback if operator(val, threshold) else val
 
 
-@rectify.register(NoneType)
+@rectify.register(type(None))  # type: ignore
 def _(*args, **kwargs):
     raise TypeError('Param "val" should not be None.')
 

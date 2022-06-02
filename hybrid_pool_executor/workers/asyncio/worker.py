@@ -1,11 +1,10 @@
 import asyncio
 import typing as t
-from dataclasses import dataclass, field
-from functools import partial
+from dataclasses import dataclass
 from queue import Empty, SimpleQueue
 from time import monotonic
 
-from hybrid_pool_executor.base import Action, CancelledError, Function, Future
+from hybrid_pool_executor.base import Action, CancelledError
 from hybrid_pool_executor.constants import (
     ACT_CLOSE,
     ACT_DONE,
@@ -14,10 +13,7 @@ from hybrid_pool_executor.constants import (
     ACT_RESET,
     ACT_RESTART,
 )
-from hybrid_pool_executor.utils import isasync
-from hybrid_pool_executor.workers.thread.worker import (
-    ThreadManager,
-    ThreadManagerSpec,
+from hybrid_pool_executor.workers.thread import (
     ThreadTask,
     ThreadWorker,
     ThreadWorkerSpec,
@@ -52,7 +48,7 @@ class AsyncWorker(ThreadWorker):
 
     @property
     def spec(self) -> AsyncWorkerSpec:
-        return self._spec
+        return t.cast(AsyncWorkerSpec, self._spec)
 
     async def _async_run(self):
         state = self._state
@@ -115,7 +111,7 @@ class AsyncWorker(ThreadWorker):
                 idle_tick = monotonic()
             else:
                 state.idle = True
-                if monotonic() - idle_tick > idle_timeout:
+                if idle_timeout >= 0 and monotonic() - idle_tick > idle_timeout:
                     response = Action(flag=ACT_CLOSE, worker_name=worker_name)
                     break
             while not request_bus.empty():
@@ -206,59 +202,3 @@ class AsyncWorker(ThreadWorker):
     def _run(self):
         self._loop = asyncio.new_event_loop()
         self._loop.run_until_complete(self._async_run())
-
-
-@dataclass
-class AsyncManagerSpec(ThreadManagerSpec):
-    mode: str = "async"
-    name_pattern: str = "AsyncManager-{manager_seq}"
-    worker_name_pattern: str = "AsyncWorker-{worker} [{manager}]"
-    task_name_pattern: str = "AsyncTask-{task} [{manager}]"
-    num_workers: int = 1
-    task_class: t.Type[AsyncTask] = AsyncTask
-    worker_class: t.Type[AsyncWorker] = AsyncWorker
-    default_worker_spec: AsyncWorkerSpec = field(
-        default_factory=partial(AsyncWorkerSpec, name="DefaultWorkerSpec")
-    )
-
-
-class AsyncManager(ThreadManager):
-    def __init__(self, spec: AsyncManagerSpec):
-        super().__init__(spec=t.cast(ThreadManagerSpec, spec))
-        self._spec = t.cast(AsyncManagerSpec, self._spec)
-
-    def get_worker_spec(
-        self,
-        name: t.Optional[str] = None,
-        daemon: t.Optional[bool] = None,
-        idle_timeout: t.Optional[float] = None,
-        wait_interval: t.Optional[float] = None,
-        max_task_count: t.Optional[int] = None,
-        max_err_count: t.Optional[int] = None,
-        max_cons_err_count: t.Optional[int] = None,
-    ) -> AsyncWorkerSpec:
-        return t.cast(
-            AsyncWorkerSpec,
-            super().get_worker_spec(
-                name=name,
-                daemon=daemon,
-                idle_timeout=idle_timeout,
-                wait_interval=wait_interval,
-                max_task_count=max_task_count,
-                max_err_count=max_err_count,
-                max_cons_err_count=max_cons_err_count,
-            ),
-        )
-
-    def submit(
-        self,
-        fn: Function,
-        args: t.Optional[t.Iterable[t.Any]] = (),
-        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
-        name: t.Optional[str] = None,
-    ) -> Future:
-        if not isasync(fn):
-            raise TypeError(
-                f'Param "fn" ({fn}) is neither a coroutine nor a coroutine function.'
-            )
-        return super().submit(fn=fn, args=args, kwargs=kwargs, name=name)

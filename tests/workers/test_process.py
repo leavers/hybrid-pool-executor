@@ -14,9 +14,9 @@ except ImportError:
     skip_cloudpickle_test = True
 
 
+from hybrid_pool_executor.base import Action
 from hybrid_pool_executor.constants import ACT_EXCEPTION, ACT_RESTART
-from hybrid_pool_executor.workers.process.worker import (
-    Action,
+from hybrid_pool_executor.workers.process import (
     ProcessManager,
     ProcessManagerSpec,
     ProcessTask,
@@ -50,6 +50,9 @@ def test_process_worker_task():
         idle_timeout=1,
         max_err_count=1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     task = ProcessTask(name="simple_task", fn=simple_task)
     worker_spec.task_bus.put(task)
 
@@ -76,6 +79,9 @@ def test_processs_worker_async_task():
         idle_timeout=1,
         max_err_count=1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     tasks = []
     for i in range(3):
         task = ProcessTask(name="simple_async_task", fn=simple_async_task_v, args=[i])
@@ -105,6 +111,9 @@ def test_process_worker_error():
         idle_timeout=1,
         max_err_count=1,
     )
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
     task = ProcessTask(name="simple_error_task", fn=simple_error_task)
     worker_spec.task_bus.put(task)
 

@@ -4,7 +4,6 @@ from concurrent.futures._base import CancelledError as BaseCancelledError
 from concurrent.futures._base import Executor
 from concurrent.futures._base import Future as BaseFuture
 from dataclasses import dataclass, field
-from typing import overload
 
 from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
 from hybrid_pool_executor.utils import get_event_loop
@@ -123,7 +122,7 @@ class BaseWorkerSpec(ABC):
 
 
 class BaseWorker(ABC):
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         self._state = WorkerState()
 
     def is_alive(self) -> bool:
@@ -135,8 +134,8 @@ class BaseWorker(ABC):
     def _ensure_running(self) -> None:
         if not self._state.running:
             raise RuntimeError(
-                f'{self.__class__.__name__} "{self._name}" is either stopped or not '
-                "started yet and not able to accept tasks."
+                f"{self.__class__.__name__} is either stopped or not started "
+                "yet and not able to accept tasks."
             )
 
     @abstractmethod
@@ -194,10 +193,9 @@ class NotSupportedError(Exception):
 
 @dataclass
 class BaseManagerSpec(ABC):
-    mode: str
-    name_pattern: str
-    worker_name_pattern: str
-    task_name_pattern: str
+    name_pattern: str = "BaseManager-{manager_seq}"
+    worker_name_pattern: str = "BaseWorker-{worker_seq} [{manager}]"
+    task_name_pattern: str = "BaseTask-{task_seq} [{manager}]"
     num_workers: int = -1
     incremental: bool = True
     wait_interval: float = 0.1
@@ -205,15 +203,6 @@ class BaseManagerSpec(ABC):
 
 
 class BaseManager(BaseWorker):
-    @abstractmethod
-    @overload
-    def submit(
-        self,
-        fn: t.Coroutine[t.Any, t.Any, t.Any],
-        name: t.Optional[str] = None,
-    ) -> Future:
-        pass
-
     @abstractmethod
     def submit(
         self,
@@ -235,7 +224,7 @@ def adjust_worker_iterator(
         if spec.num_workers < 0:
             iterator = range(num_curr_tasks - num_idle_workers)
         else:
-            num_curr_workers: int = len(curr_workers)
+            num_curr_workers: int = len(t.cast(t.Sized, curr_workers))
             iterator = range(
                 num_curr_workers,
                 min(
@@ -244,17 +233,29 @@ def adjust_worker_iterator(
                 ),
             )
     else:
-        iterator = range(len(curr_workers), spec.num_workers)
+        iterator = range(len(t.cast(t.Sized, curr_workers)), spec.num_workers)
     return iterator
 
 
 @dataclass
 class ModuleSpec:
     name: str
-    manager_class: t.Type[BaseManager]
-    manager_spec_class: t.Type[BaseManagerSpec]
-    worker_class: t.Type[BaseWorker]
-    worker_spec_class: t.Type[BaseWorkerSpec]
+    manager_type: t.Union[
+        t.Type[BaseManager],
+        t.Callable[[BaseManagerSpec], BaseManager],
+    ]
+    manager_spec_type: t.Union[
+        t.Type[BaseManagerSpec],
+        t.Callable[[], BaseManagerSpec],
+    ]
+    worker_type: t.Union[
+        t.Type[BaseWorker],
+        t.Callable[[BaseWorkerSpec], BaseWorker],
+    ]
+    worker_spec_type: t.Union[
+        t.Type[BaseWorkerSpec],
+        t.Callable[[], BaseWorkerSpec],
+    ]
     tags: t.FrozenSet[str]
     enabled: bool = True
 
