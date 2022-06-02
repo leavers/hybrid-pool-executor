@@ -11,7 +11,7 @@ _default_modules = [
 ]
 
 
-class ModuleSpecRepo(dict[str, ModuleSpec]):
+class ModuleSpecRepo(dict):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._tag_index: t.Dict[str, t.Set[str]] = {}
@@ -29,6 +29,9 @@ class ModuleSpecRepo(dict[str, ModuleSpec]):
                 self._tag_index[tag] = set()
             index = self._tag_index[tag]
             index.add(name)
+
+    def __getitem__(self, name: str) -> ModuleSpec:
+        return t.cast(ModuleSpec, super().__getitem__(name))
 
     def __setitem__(self, name: str, spec: ModuleSpec) -> None:
         if name != spec.name:
