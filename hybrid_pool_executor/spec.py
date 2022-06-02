@@ -11,33 +11,32 @@ _default_modules = [
 ]
 
 
-class ModuleSpecFactory(metaclass=SingletonMeta):
-    def __init__(self):
-        self._specs: t.Dict[str, ModuleSpec] = {}
+class ModuleSpecRepo(dict[str, ModuleSpec]):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._tag_index: t.Dict[str, t.Set[str]] = {}
-        # load default module specs
-        self._import_default()
+        self = t.cast(t.Dict[str, ModuleSpec], self)
 
-    def import_spec(self, spec: ModuleSpec):
+    def import_spec(self, spec: ModuleSpec, overwrite: bool = False):
         name = spec.name
-        if name in self._specs:
-            raise ExistsError(f'Found duplicated spec "{name}".')
-        self._specs[name] = spec
+        if name in self and not overwrite:
+            raise ExistsError(
+                f'Spec "{name}" already exists, set overwrite=True if you want to '
+                "overwrite existing spec."
+            )
+        super().__setitem__(name, spec)
         for tag in spec.tags:
             if tag not in self._tag_index:
                 self._tag_index[tag] = set()
             index = self._tag_index[tag]
             index.add(name)
 
-    def import_module(self, module: str):
-        module_spec: ModuleSpec = t.cast(
-            ModuleSpec, importlib.import_module(module).MODULE_SPEC
-        )
-        self.import_spec(module_spec)
-
-    def _import_default(self):
-        for module in _default_modules:
-            self.import_module(module)
+    def __setitem__(self, name: str, spec: ModuleSpec) -> None:
+        if name != spec.name:
+            raise ValueError(
+                f'Key ("{name}") and spec name ("{spec.name}") does not match.'
+            )
+        return self.import_spec(spec=spec, overwrite=True)
 
     def filter_by_tags(self, *tags: str) -> t.Optional[t.FrozenSet[str]]:
         if not tags:
@@ -53,17 +52,28 @@ class ModuleSpecFactory(metaclass=SingletonMeta):
                 filter &= index
         return frozenset(filter)
 
-    def __contains__(self, name: str) -> bool:
-        return name in self._specs
 
-    def __getitem__(self, name: str):
-        return self._specs[name]
+class ModuleSpecFactory(ModuleSpecRepo, metaclass=SingletonMeta):
+    def __init__(self):
+        super().__init__()
+        # load default module specs
+        self._import_default()
 
-    def get(self, name: str):
-        return self._specs.get(name)
+    def _import_default(self):
+        for module in _default_modules:
+            self.import_module(module)
 
-    def pop(self, name: str, default=None):
-        return self._specs.pop(name, default)
+    def import_module(self, module: str):
+        module_spec: ModuleSpec = t.cast(
+            ModuleSpec, importlib.import_module(module).MODULE_SPEC
+        )
+        self.import_spec(module_spec)
+
+    def get_repo(self) -> ModuleSpecRepo:
+        repo = ModuleSpecRepo()
+        for spec in self.values():
+            repo.import_spec(spec)
+        return repo
 
 
 spec_factory = ModuleSpecFactory()

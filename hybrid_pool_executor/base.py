@@ -251,10 +251,22 @@ def adjust_worker_iterator(
 @dataclass
 class ModuleSpec:
     name: str
-    manager_class: t.Type[BaseManager]
-    manager_spec_class: t.Type[BaseManagerSpec]
-    worker_class: t.Type[BaseWorker]
-    worker_spec_class: t.Type[BaseWorkerSpec]
+    manager_class: t.Union[
+        t.Type[BaseManager],
+        t.Callable[[], BaseManager],
+    ]
+    manager_spec_class: t.Union[
+        t.Type[BaseManagerSpec],
+        t.Callable[[], BaseManagerSpec],
+    ]
+    worker_class: t.Union[
+        t.Type[BaseWorker],
+        t.Callable[[], BaseWorker],
+    ]
+    worker_spec_class: t.Union[
+        t.Type[BaseWorkerSpec],
+        t.Callable[[], BaseWorkerSpec],
+    ]
     tags: t.FrozenSet[str]
     enabled: bool = True
 

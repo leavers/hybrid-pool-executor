@@ -12,7 +12,7 @@ from hybrid_pool_executor.base import (
     NotSupportedError,
 )
 from hybrid_pool_executor.constants import Function
-from hybrid_pool_executor.spec import ModuleSpecFactory, spec_factory
+from hybrid_pool_executor.spec import ModuleSpecRepo, spec_factory
 from hybrid_pool_executor.utils import isasync
 
 _all_executors = weakref.WeakSet()
@@ -42,10 +42,13 @@ class HybridPoolExecutor(BaseExecutor):
         incremental_async_workers: bool = True,
         async_worker_name_pattern: t.Optional[str] = None,
         redirect_async: t.Optional[str] = None,
+        extra_specs: t.Optional[t.Iterable[ModuleSpec]] = None,
         **kwargs,
     ):
-        # TODO: incremental/redirect/pattern logic
-        self._spec_factory: ModuleSpecFactory = spec_factory
+        self._spec_repo: ModuleSpecRepo = spec_factory.get_repo()
+        if extra_specs is not None:
+            for spec in extra_specs:
+                self._spec_repo.import_spec(spec, overwrite=True)
         self._managers: t.Dict[str, BaseManager] = {}
         self._manager_kwargs = {
             "thread_workers": thread_workers,
@@ -69,6 +72,10 @@ class HybridPoolExecutor(BaseExecutor):
         global _all_executors
         _all_executors.add(self)
         self._is_alive: bool = True
+
+    @property
+    def specs(self) -> ModuleSpecRepo:
+        return self._spec_repo
 
     @classmethod
     def _get_manager(
@@ -183,7 +190,7 @@ class HybridPoolExecutor(BaseExecutor):
         mode = modes.__iter__().__next__()
         manager = self._managers.get(mode)
         if not manager or not manager.is_alive():
-            module_spec: ModuleSpec = self._spec_factory[mode]
+            module_spec: ModuleSpec = self._spec_repo[mode]
             manager = self._get_manager(
                 mode=mode,
                 module_spec=module_spec,
@@ -217,7 +224,7 @@ class HybridPoolExecutor(BaseExecutor):
         tags: t.Optional[t.Iterable[str]] = None,
     ) -> t.FrozenSet[str]:
         if tags:
-            mode_filter = self._spec_factory.filter_by_tags(*tags)
+            mode_filter = self._spec_repo.filter_by_tags(*tags)
         else:
             mode_filter = None
         if mode:
