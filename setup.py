@@ -1,3 +1,4 @@
+import typing as t
 from setuptools import find_packages, setup
 
 project = "hybrid_pool_executor"
@@ -12,11 +13,11 @@ def get_version():
     return __import__(project).__version__
 
 
-install_requires = []
-extra_require = [
+install_requires: t.List[str] = []
+extra_require: t.List[str] = [
     "cloudpickle",
 ]
-tests_require = [
+tests_require: t.List[str] = [
     "black",
     "coverage[toml]>=5.3",
     "isort>=5.0.0",
@@ -27,7 +28,7 @@ tests_require = [
     "pytest-asyncio",
     "pytest-timeout",
 ]
-dev_require = tests_require + [
+dev_require: t.List[str] = tests_require + [
     "sphinx",
     "sphinx-rtd-theme",
     "tox",

@@ -97,7 +97,13 @@ class HybridPoolExecutor(BaseExecutor):
             manager_spec.worker_name_pattern = worker_name_pattern
         return module_spec.manager_type(manager_spec)
 
-    def submit(self, fn: t.Callable[..., t.Any], /, *args, **kwargs) -> Future:  # type: ignore
+    def submit(
+        self,
+        fn: t.Callable[..., t.Any],
+        /,
+        *args,
+        **kwargs,
+    ) -> Future:  # type: ignore
         return self.submit_task(
             fn,
             args=args,

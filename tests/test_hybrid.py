@@ -66,10 +66,6 @@ def test_executor_guess_mode():
     assert len(guess_mode(simple_delay_task, tags=["black hole"])) == 0
 
 
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="process spawn on darwin is too slow",
-)
 @pytest.mark.timeout(20 if sys.platform == "linux" else 60)
 @pytest.mark.asyncio
 async def test_executor_high_concurrency():
@@ -79,11 +75,12 @@ async def test_executor_high_concurrency():
         "process": [],
         "async": [],
     }
+    total_tasks, process_tasks = (64, 16) if sys.platform == "linux" else (16, 4)
     # NOTE: The more threads are created, the more time they takes to stop, and the
     # longer the pytest timeout tolerance is required.
     with HybridPoolExecutor() as pool:
-        for i in range(64):
-            if i < 16:
+        for i in range(total_tasks):
+            if i < process_tasks:
                 futures["process"].append(
                     pool.submit_task(fn=simple_delay_task, args=(i,), mode="process")
                 )
@@ -95,8 +92,8 @@ async def test_executor_high_concurrency():
             )
             # TODO: process futures need syncing among processes by manager, code will
             #       be probably blocked here to wait for all process futures to be set.
-    for i in range(64):
-        if i < 16:
+    for i in range(total_tasks):
+        if i < process_tasks:
             assert await futures["process"][i] == i
         assert await futures["thread"][i] == i
         assert await futures["async"][i] == i
