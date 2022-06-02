@@ -15,7 +15,6 @@ class ModuleSpecRepo(dict[str, ModuleSpec]):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._tag_index: t.Dict[str, t.Set[str]] = {}
-        self = t.cast(t.Dict[str, ModuleSpec], self)
 
     def import_spec(self, spec: ModuleSpec, overwrite: bool = False):
         name = spec.name
@@ -41,7 +40,7 @@ class ModuleSpecRepo(dict[str, ModuleSpec]):
     def filter_by_tags(self, *tags: str) -> t.Optional[t.FrozenSet[str]]:
         if not tags:
             return frozenset()
-        filter = set()
+        filter: t.Set[str] = set()
         for tag in tags:
             index = self._tag_index.get(tag)
             if not index:

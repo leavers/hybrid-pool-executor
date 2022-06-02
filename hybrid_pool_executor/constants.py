@@ -1,13 +1,14 @@
-from typing import Any, Callable, Coroutine, Union
+import typing as t
+from multiprocessing.queues import Queue as ProcessQueue
+from queue import Queue, SimpleQueue
 
-Function = Union[Callable[..., Any], Coroutine[Any, Any, Any]]
+Function = t.Union[t.Callable[..., t.Any], t.Coroutine[t.Any, t.Any, t.Any]]
+ThreadBus = t.Union[Queue, SimpleQueue]
+ThreadBusType = t.Union[t.Type[Queue], t.Type[SimpleQueue], t.Callable[[], ThreadBus]]
+ProcessBus = ProcessQueue
+ProcessBusType = t.Union[t.Type[ProcessBus], t.Callable[[], ProcessBus]]
 
 PRESERVED_TASK_TAGS = frozenset({"async", "process", "thread"})
-
-ERROR_MODE_RAISE = "raise"
-ERROR_MODE_IGNORE = "ignore"
-ERROR_MODE_COERCE = "coerce"
-ERROR_MODES = (ERROR_MODE_RAISE, ERROR_MODE_IGNORE, ERROR_MODE_COERCE)
 
 ActionFlag = int
 ACT_NONE = 0

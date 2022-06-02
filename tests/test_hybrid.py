@@ -79,9 +79,11 @@ async def test_executor_high_concurrency():
         "process": [],
         "async": [],
     }
+    # NOTE: The more threads are created, the more time they takes to stop, and the
+    # longer the pytest timeout tolerance is required.
     with HybridPoolExecutor() as pool:
-        for i in range(128):
-            if i < 32:
+        for i in range(64):
+            if i < 16:
                 futures["process"].append(
                     pool.submit_task(fn=simple_delay_task, args=(i,), mode="process")
                 )
@@ -93,8 +95,8 @@ async def test_executor_high_concurrency():
             )
             # TODO: process futures need syncing among processes by manager, code will
             #       be probably blocked here to wait for all process futures to be set.
-    for i in range(128):
-        if i < 32:
+    for i in range(64):
+        if i < 16:
             assert await futures["process"][i] == i
         assert await futures["thread"][i] == i
         assert await futures["async"][i] == i

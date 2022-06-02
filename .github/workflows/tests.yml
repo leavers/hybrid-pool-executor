@@ -28,22 +28,33 @@ jobs:
           - "black"
           - "flake8"
           - "isort"
+          - "mypy"
         include:
           - python-version: "3.8"
             os: "ubuntu-20.04"
-            toxenv: "py38"
+            toxenv:
+              - "py38"
+              - "py38_extra"
           - python-version: "3.9"
             os: "ubuntu-20.04"
-            toxenv: "py39"
+            toxenv:
+              - "py39"
+              - "py39_extra"
           - python-version: "3.10"
             os: "ubuntu-20.04"
-            toxenv: "py310"
+            toxenv:
+              - "py310"
+              - "py310_extra"
           - python-version: "3.8"
             os: "macos-latest"
-            toxenv: "py38"
+            toxenv:
+              - "py38"
+              - "py38_extra"
           - python-version: "3.8"
             os: "windows-latest"
-            toxenv: "py38"
+            toxenv:
+              - "py38"
+              - "py38_extra"
 
     steps:
       - name: Checkout repo

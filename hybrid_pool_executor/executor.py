@@ -1,7 +1,7 @@
 import atexit
 import time
 import typing as t
-import weakref
+from weakref import WeakSet
 
 from hybrid_pool_executor.base import (
     BaseExecutor,
@@ -15,7 +15,7 @@ from hybrid_pool_executor.constants import Function
 from hybrid_pool_executor.spec import ModuleSpecRepo, spec_factory
 from hybrid_pool_executor.utils import isasync
 
-_all_executors = weakref.WeakSet()
+_all_executors: WeakSet = WeakSet()
 
 
 def _python_exit():
@@ -86,7 +86,7 @@ class HybridPoolExecutor(BaseExecutor):
     ) -> BaseManager:
         if (redirect := kwargs.get(f"redirect_{mode}")) is not None:
             mode = redirect
-        manager_spec: BaseManagerSpec = module_spec.manager_spec_class(mode=mode)
+        manager_spec: BaseManagerSpec = module_spec.manager_spec_type()
         if (num_workers := kwargs.get(f"{mode}_workers")) is not None:
             manager_spec.num_workers = num_workers
         if (incremental := kwargs.get(f"incremental_{mode}_workers")) is not None:
@@ -95,7 +95,7 @@ class HybridPoolExecutor(BaseExecutor):
             worker_name_pattern := kwargs.get(f"{mode}_worker_name_pattern")
         ) is not None:
             manager_spec.worker_name_pattern = worker_name_pattern
-        return module_spec.manager_class(manager_spec)
+        return module_spec.manager_type(manager_spec)
 
     def submit(self, fn: t.Callable[..., t.Any], /, *args, **kwargs) -> Future:
         return self.submit_task(
@@ -139,7 +139,7 @@ class HybridPoolExecutor(BaseExecutor):
                 fs.append(
                     self.submit_task(
                         fn=fn,
-                        kwargs=params,
+                        kwargs=t.cast(t.Dict[str, t.Any], params),
                         name=params.get("_name"),
                         mode=params.get("_mode", mode),
                         tags=params.get("_tags", tags),

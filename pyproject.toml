@@ -41,3 +41,4 @@ remove-unused-variables = true
 
 [tool.mypy]
 ignore_missing_imports = true
+# use comment "type: ignore" to ignore single line
