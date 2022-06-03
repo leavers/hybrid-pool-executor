@@ -34,11 +34,11 @@ jobs:
       - name: Create and check wheel
         run: tox -e ${{ matrix.toxenv }}
 
-      - name: Upload Release Assets
-        uses: alexellis/upload-assets@0.3.0
+      - name: Upload wheels to release
+        uses: AButler/upload-release-assets@v2.0
         with:
-          asset_paths: 
-            - "dist/*"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          files: 'dist/*'
 
       - name: Publish wheel
         env:
