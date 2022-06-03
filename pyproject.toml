@@ -46,8 +46,9 @@ dev = [
     "tox",
 ]
 
-[tool.setuptools]
-packages = ["hybrid_pool_executor"]
+[tool.setuptools.packages.find]
+include = ["hybrid_pool_executor*"]
+exclude = ["tests"]
 
 [tool.setuptools.dynamic]
 version = { attr = "hybrid_pool_executor.__version__" }
@@ -57,7 +58,7 @@ current_version = "0.0.2"
 version_pattern = "MAJOR.MINOR.PATCH"
 commit_message  = "Bump version {old_version} -> {new_version}"
 commit = true
-tag = true
+tag = false
 push = false
 
 [tool.bumpver.file_patterns]
