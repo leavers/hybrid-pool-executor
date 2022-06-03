@@ -4,7 +4,6 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hybrid-pool-executor"
-version = "0.0.2"
 description = "Pool executor supporting thread, process and async."
 readme = "README.rst"
 authors = [{ name = "Leavers", email = "leavers930@gmail.com" }]
@@ -27,6 +26,7 @@ classifiers = [
 ]
 keywords = ["concurrent", "thread"]
 requires-python = ">=3.8"
+dynamic = ["version"]
 
 [project.optional-dependencies]
 extra = ["cloudpickle"]
@@ -46,6 +46,12 @@ dev = [
     "tox",
 ]
 
+[tool.setuptools]
+packages = ["hybrid_pool_executor"]
+
+[tool.setuptools.dynamic]
+version = { attr = "hybrid_pool_executor.__version__" }
+
 [tool.bumpver]
 current_version = "0.0.2"
 version_pattern = "MAJOR.MINOR.PATCH"
@@ -55,6 +61,7 @@ tag = true
 push = false
 
 [tool.bumpver.file_patterns]
+# use "bumpver update --major/minor/patch --dry" to test
 "pyproject.toml" = ['version = "{version}"']
 "hybrid_pool_executor/__init__.py" = ['__version__ = "{version}"']
 
