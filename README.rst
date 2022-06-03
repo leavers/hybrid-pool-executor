@@ -49,7 +49,7 @@ Example:
         # run coroutine in a thread
         future5 = pool.submit(solve_async(5), _mode="thread")
         # or in a process
-        future6 = pool.submit(solve_async, 6, _mode="thread")
+        future6 = pool.submit(solve_async, 6, _mode="process")
 
         # all futures can be get either synchronously or asynchronously
         await future0  # result from a thread worker
