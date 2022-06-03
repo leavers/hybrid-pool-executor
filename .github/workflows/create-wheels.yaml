@@ -1,0 +1,49 @@
+name: Create wheel
+
+on:
+  # run when a release has been created
+  release:
+    types: [created]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  make-wheel:
+    name: ${{ matrix.python-version }}-${{ matrix.architecture }}-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - "ubuntu-latest"
+        python-version:
+          - "3.8"
+        toxenv:
+          - "build_wheel"
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Create and check wheel
+        run: tox -e ${{ matrix.toxenv }}
+
+      - name: Upload wheels to release
+        uses: AButler/upload-release-assets@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          files: 'dist/*'
+
+      - name: Publish wheel
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.pypi_token }}
+        run: |
+          pip install -U twine
+          twine upload --skip-existing dist/*
