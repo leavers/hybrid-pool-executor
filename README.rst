@@ -1,4 +1,13 @@
 |Build Status|
+|PyPI|
+|PyPI Version|
+
+.. |Build Status| image:: https://github.com/leavers/hybrid-pool-executor/actions/workflows/tests.yml/badge.svg
+   :target: https://github.com/leavers/hybrid-pool-executor/actions/workflows/tests.yml
+.. |PyPI| image:: https://img.shields.io/pypi/v/hybrid-pool-executor.svg
+   :target: https://pypi.org/project/hybrid-pool-executor/
+.. |PyPI Version| image:: https://img.shields.io/pypi/pyversions/hybrid-pool-executor.svg
+   :target: https://pypi.org/project/hybrid-pool-executor/
 
 HybridPoolExecutor
 ==================
@@ -60,6 +69,3 @@ Example:
 
     if __name__ == "__main__":
         asyncio.run(main())
-
-.. |Build Status| image:: https://github.com/leavers/hybrid-pool-executor/actions/workflows/tests.yml/badge.svg
-   :target: https://github.com/leavers/hybrid-pool-executor/actions/workflows/tests.yml
