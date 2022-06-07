@@ -2,8 +2,6 @@ import typing as t
 from dataclasses import dataclass, field
 from functools import partial
 
-from hybrid_pool_executor.base import Function, Future
-from hybrid_pool_executor.utils import isasync
 from hybrid_pool_executor.workers.asyncio.worker import (
     AsyncTask,
     AsyncWorker,
@@ -60,16 +58,3 @@ class AsyncManager(ThreadManager):
                 max_cons_err_count=max_cons_err_count,
             ),
         )
-
-    def submit(
-        self,
-        fn: Function,
-        args: t.Optional[t.Iterable[t.Any]] = (),
-        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
-        name: t.Optional[str] = None,
-    ) -> Future:
-        if not isasync(fn):
-            raise TypeError(
-                f'Param "fn" ({fn}) is neither a coroutine nor a coroutine function.'
-            )
-        return super().submit(fn=fn, args=args, kwargs=kwargs, name=name)
