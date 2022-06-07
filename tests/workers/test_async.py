@@ -44,6 +44,32 @@ def test_async_worker_task():
 
 
 @pytest.mark.timeout(10)
+def test_sync_worker_task():
+    def simple_task():
+        return "done"
+
+    worker_spec = AsyncWorkerSpec(name="TestAsyncWorker", idle_timeout=1)
+    worker_spec.task_bus = worker_spec.task_bus_type()
+    worker_spec.request_bus = worker_spec.request_bus_type()
+    worker_spec.response_bus = worker_spec.response_bus_type()
+    task = AsyncTask(name="simple_task", fn=simple_task)
+    worker_spec.task_bus.put(task)
+
+    worker = AsyncWorker(worker_spec)
+    worker.start()
+
+    assert task.future.result() == "done"
+
+    worker.stop()
+    assert not worker.is_alive()
+    assert not worker.is_idle()
+
+    ref = weakref.ref(worker)
+    del worker_spec, worker, task
+    assert ref() is None
+
+
+@pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_async_worker_task_async_future():
     async def simple_task():

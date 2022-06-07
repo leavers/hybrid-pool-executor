@@ -13,6 +13,7 @@ from hybrid_pool_executor.constants import (
     ACT_RESET,
     ACT_RESTART,
 )
+from hybrid_pool_executor.utils import iscoroutine, iscoroutinefunction
 from hybrid_pool_executor.workers.thread import (
     ThreadTask,
     ThreadWorker,
@@ -24,7 +25,7 @@ NoneType = type(None)
 
 @dataclass
 class AsyncTask(ThreadTask):
-    pass
+    ...
 
 
 @dataclass
@@ -78,8 +79,15 @@ class AsyncWorker(ThreadWorker):
         ):
             result = resp = None
             try:
-                task.fn = t.cast(t.Callable[..., t.Any], task.fn)
-                result = await task.fn(*task.args, **task.kwargs)
+                if iscoroutine(task.fn):
+                    task.fn = t.cast(t.Coroutine[t.Any, t.Any, t.Any], task.fn)
+                    result = await task.fn
+                else:
+                    task.fn = t.cast(t.Callable[..., t.Any], task.fn)
+                    if iscoroutinefunction(task.fn):
+                        result = await task.fn(*task.args, **task.kwargs)
+                    else:
+                        result = task.fn(*task.args, **task.kwargs)
             except Exception as exc:
                 resp = Action(
                     flag=ACT_EXCEPTION,
@@ -87,6 +95,7 @@ class AsyncWorker(ThreadWorker):
                     worker_name=worker_name,
                 )
                 task.future.set_exception(exc)
+                del task.fn
             else:
                 resp = Action(
                     flag=ACT_DONE,

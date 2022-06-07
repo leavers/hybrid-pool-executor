@@ -13,7 +13,7 @@ from hybrid_pool_executor.base import (
 )
 from hybrid_pool_executor.constants import Function
 from hybrid_pool_executor.spec import ModuleSpecRepo, spec_factory
-from hybrid_pool_executor.utils import isasync
+from hybrid_pool_executor.utils import isasync, iscoroutine
 
 _all_executors: WeakSet = WeakSet()
 
@@ -170,6 +170,29 @@ class HybridPoolExecutor(BaseExecutor):
 
         return result_iterator()
 
+    @t.overload
+    def submit_task(
+        self,
+        fn: t.Coroutine[t.Any, t.Any, t.Any],
+        *,
+        name: t.Optional[str] = None,
+        mode: t.Optional[str] = None,
+        tags: t.Optional[t.Iterable[str]] = None,
+    ) -> Future:
+        ...
+
+    @t.overload
+    def submit_task(
+        self,
+        fn: t.Callable[..., t.Any],
+        args: t.Optional[t.Iterable[t.Any]] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+        name: t.Optional[str] = None,
+        mode: t.Optional[str] = None,
+        tags: t.Optional[t.Iterable[str]] = None,
+    ) -> Future:
+        ...
+
     def submit_task(
         self,
         fn: Function,
@@ -180,6 +203,8 @@ class HybridPoolExecutor(BaseExecutor):
         tags: t.Optional[t.Iterable[str]] = None,
         **_,
     ) -> Future:
+        if iscoroutine(fn) and (args or kwargs):
+            raise ValueError("Coroutine should not have arguments specified.")
         modes = self._guess_mode(fn, mode, tags)
         if not modes:
             raise NotSupportedError(
@@ -207,7 +232,19 @@ class HybridPoolExecutor(BaseExecutor):
         if not manager.is_alive():
             manager.start()
         self._clear_manager_if_needed()
-        return manager.submit(fn=fn, args=args, kwargs=kwargs, name=name)
+        return (
+            manager.submit(
+                fn=t.cast(t.Coroutine[t.Any, t.Any, t.Any], fn),
+                name=name,
+            )
+            if iscoroutine(fn)
+            else manager.submit(
+                fn=t.cast(t.Callable[..., t.Any], fn),
+                args=args,
+                kwargs=kwargs,
+                name=name,
+            )
+        )
 
     def _clear_manager_if_needed(self) -> None:
         self._clear_counter += 1

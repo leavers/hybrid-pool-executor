@@ -140,15 +140,15 @@ class BaseWorker(ABC):
 
     @abstractmethod
     def start(self):
-        pass
+        ...
 
     @abstractmethod
     def stop(self, timeout: t.Optional[float] = None):
-        pass
+        ...
 
     @abstractmethod
     def terminate(self):
-        pass
+        ...
 
     def __enter__(self):
         self.start()
@@ -184,11 +184,11 @@ CancelledError = BaseCancelledError
 
 
 class ExistsError(Exception):
-    pass
+    ...
 
 
 class NotSupportedError(Exception):
-    pass
+    ...
 
 
 @dataclass
@@ -203,6 +203,25 @@ class BaseManagerSpec(ABC):
 
 
 class BaseManager(BaseWorker):
+    @t.overload
+    def submit(
+        self,
+        fn: t.Coroutine[t.Any, t.Any, t.Any],
+        *,
+        name: t.Optional[str] = None,
+    ) -> Future:
+        ...
+
+    @t.overload
+    def submit(
+        self,
+        fn: t.Callable[..., t.Any],
+        args: t.Optional[t.Iterable[t.Any]] = (),
+        kwargs: t.Optional[t.Dict[str, t.Any]] = None,
+        name: t.Optional[str] = None,
+    ) -> Future:
+        ...
+
     @abstractmethod
     def submit(
         self,
@@ -211,7 +230,7 @@ class BaseManager(BaseWorker):
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
     ) -> Future:
-        pass
+        ...
 
 
 def adjust_worker_iterator(
