@@ -122,7 +122,7 @@ class AsyncToSync:
         if is_coro:
             if args or kwargs:
                 raise RuntimeError(
-                    f"Coroutine should not be invoked with args or kwargs."
+                    "Coroutine should not be invoked with args or kwargs."
                 )
             coro = self.fn
         else:
