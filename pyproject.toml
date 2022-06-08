@@ -6,7 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "hybrid-pool-executor"
 description = "Pool executor supporting thread, process and async."
 readme = "README.rst"
-authors = [{ name = "Leavers", email = "leavers930@gmail.com" }]
+authors = [
+    { name = "Leavers" },
+    { email = "leavers930@gmail.com" },
+]
 license = { text = "MIT License" }
 dependencies = []
 classifiers = [
