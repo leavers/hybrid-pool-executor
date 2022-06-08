@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import ctypes
 import functools
 import inspect
@@ -93,22 +94,49 @@ def get_event_loop(
 
 
 class AsyncToSync:
-    def __init__(self, fn, /, *args, **kwargs):
+    def __init__(self, fn, /, loop: t.Optional[asyncio.AbstractEventLoop] = None):
         self.fn = fn
-        self.args = args
-        self.kwargs = kwargs
-        self.is_coro = iscoroutine(self.fn)
-        self.is_func = iscoroutinefunction(self.fn)
+        self.loop = loop
 
-    def __call__(self, loop=None):
-        if not self.is_coro and not self.is_func:
-            return self.fn(*self.args, **self.kwargs)
-        if self.is_func:
-            self.fn = self.fn(*self.args, **self.kwargs)
-        loop = get_event_loop(loop)
+    @staticmethod
+    def _restore_context(context):
+        for cvar in context:
+            new_var = context.get(cvar)
+            try:
+                if cvar.get() != new_var:
+                    cvar.set(new_var)
+            except LookupError:
+                cvar.set(new_var)
+
+    @staticmethod
+    async def _wrap(coro, context_list):
+        AsyncToSync._restore_context(context_list[0])
+        return await coro
+
+    def __call__(self, *args, **kwargs):
+        is_coro = iscoroutine(self.fn)
+        is_coro_func = iscoroutinefunction(self.fn)
+
+        if not is_coro and not is_coro_func:
+            return self.fn(*args, **kwargs)
+        if is_coro:
+            if args or kwargs:
+                raise RuntimeError(
+                    "Coroutine should not be invoked with args or kwargs."
+                )
+            coro = self.fn
+        else:
+            coro = self.fn(*args, **kwargs)
+
+        loop = get_event_loop(self.loop)
         if loop.is_running():
             raise RuntimeError("Unable to execute when loop is already running.")
-        return loop.run_until_complete(self.fn)
+        context_list = [contextvars.copy_context()]
+        try:
+            result = loop.run_until_complete(AsyncToSync._wrap(coro, context_list))
+        finally:
+            AsyncToSync._restore_context(context_list[0])
+        return result
 
 
 class KillableThread(Thread):

@@ -167,11 +167,8 @@ class ThreadWorker(BaseWorker):
                 if task.cancelled:
                     raise CancelledError(f'Future "{task.name}" has been cancelled')
                 if isasync(task.fn):
-                    task.fn = t.cast(t.Coroutine[t.Any, t.Any, t.Any], task.fn)
-                    sync_coro = AsyncToSync(task.fn, *task.args, **task.kwargs)
-                    result = sync_coro()
+                    result = AsyncToSync(task.fn)(*task.args, **task.kwargs)
                 else:
-                    task.fn = t.cast(t.Callable[..., t.Any], task.fn)
                     result = task.fn(*task.args, **task.kwargs)
             except Exception as exc:
                 err_count += 1
