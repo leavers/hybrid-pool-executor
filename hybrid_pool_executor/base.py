@@ -1,7 +1,7 @@
 import typing as t
 from abc import ABC, abstractmethod
 from concurrent.futures._base import CancelledError as BaseCancelledError
-from concurrent.futures._base import Executor
+from concurrent.futures._base import Error, Executor
 from concurrent.futures._base import Future as BaseFuture
 from dataclasses import dataclass, field
 
@@ -183,11 +183,15 @@ BaseExecutor = Executor
 CancelledError = BaseCancelledError
 
 
-class ExistsError(Exception):
+class FatalError(Error):
     ...
 
 
-class NotSupportedError(Exception):
+class ExistsError(Error):
+    ...
+
+
+class NotSupportedError(Error):
     ...
 
 

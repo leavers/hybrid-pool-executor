@@ -14,6 +14,8 @@ from multiprocessing.reduction import ForkingPickler
 from multiprocessing.util import Finalize, debug, info, is_exiting, register_after_fork
 from queue import Empty, Full
 
+from hybrid_pool_executor.base import BaseTask, FatalError
+
 try:
     import cloudpickle
 
@@ -23,6 +25,10 @@ except ImportError:
 
 
 _sentinel = object()
+
+
+def _unpickable_error(info: str):
+    raise FatalError(info)
 
 
 class Queue(BaseQueue):
@@ -243,7 +249,18 @@ class Queue(BaseQueue):
                             return
 
                         # serialize the data before acquiring the lock
-                        obj = _ForkingPickler.dumps(obj)
+                        try:
+                            obj = _ForkingPickler.dumps(obj)
+                        except TypeError as exc:
+                            if not isinstance(obj, BaseTask):
+                                raise exc
+                            obj = _ForkingPickler.dumps(
+                                obj.__class__(
+                                    name=obj.name,
+                                    fn=_unpickable_error,
+                                    args=(str(exc),),
+                                )
+                            )
                         if wacquire is None:
                             send_bytes(obj)
                         else:

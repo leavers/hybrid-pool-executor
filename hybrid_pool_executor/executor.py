@@ -1,6 +1,7 @@
 import atexit
 import time
 import typing as t
+from random import choice
 from weakref import WeakSet
 
 from hybrid_pool_executor.base import (
@@ -218,7 +219,7 @@ class HybridPoolExecutor(BaseExecutor):
                     tags=tags,
                 )
             )
-        mode = modes.__iter__().__next__()
+        mode = choice(list(modes))  # pick one randomly
         manager = self._managers.get(mode)
         if not manager or not manager.is_alive():
             module_spec: ModuleSpec = self._spec_repo[mode]

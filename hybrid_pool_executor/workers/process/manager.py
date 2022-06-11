@@ -249,6 +249,7 @@ class ProcessManager(BaseManager):
         response: Action = self._response_bus.get()
         response.task_name = t.cast(str, response.task_name)
         response.worker_name = t.cast(str, response.worker_name)
+        # TODO: ACT_FATAL_ERROR logic
         if response.match(ACT_DONE, ACT_EXCEPTION):
             task: ProcessTask = self._curr_tasks.pop(response.task_name)
             task.future = t.cast(Future, task.future)
