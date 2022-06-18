@@ -43,9 +43,9 @@ class ProcessWorkerSpec(BaseWorkerSpec):
     task_bus_type: ProcessBusType = Queue
     request_bus_type: ProcessBusType = Queue
     response_bus_type: ProcessBusType = Queue
-    task_bus: t.Optional[ProcessBus] = None
-    request_bus: t.Optional[ProcessBus] = None
-    response_bus: t.Optional[ProcessBus] = None
+    task_bus: t.Optional[ProcessBus[ProcessTask]] = None
+    request_bus: t.Optional[ProcessBus[Action]] = None
+    response_bus: t.Optional[ProcessBus[Action]] = None
     task_bus_qsize: Synchronized = field(
         default_factory=t.cast(
             t.Callable[[], Synchronized],

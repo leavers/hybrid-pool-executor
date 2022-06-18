@@ -1,5 +1,6 @@
 import collections
 import errno
+import importlib
 import os
 import sys
 import threading
@@ -15,13 +16,15 @@ from multiprocessing.util import Finalize, debug, info, is_exiting, register_aft
 from queue import Empty, Full
 
 from hybrid_pool_executor.base import BaseTask, FatalError
+from hybrid_pool_executor.constants import QueueLike
 
-try:
-    import cloudpickle
 
-    _ForkingPickler = cloudpickle
-except ImportError:
-    _ForkingPickler = ForkingPickler
+class PicklerLike(t.Protocol):
+    def dumps(*args, **kwargs) -> t.Any:
+        ...
+
+    def loads(*args, **kwargs) -> bytes:
+        ...
 
 
 _sentinel = object()
@@ -31,8 +34,35 @@ def _unpickable_error(info: str):
     raise FatalError(info)
 
 
-class Queue(BaseQueue):
-    def __init__(self, maxsize: int = 0, *, ctx: t.Optional[_ctx.BaseContext] = None):
+def _get_pickler(
+    pickler: t.Literal["auto", "cloudpickle", "dill", "pickle"] = "auto"
+) -> PicklerLike:
+    if pickler == "pickle":
+        return t.cast(PicklerLike, ForkingPickler)
+    elif pickler == "auto":
+        for importing in ("cloudpickle", "dill"):
+            try:
+                forking_pickler = t.cast(
+                    PicklerLike,
+                    importlib.import_module(importing),
+                )
+                break
+            except ImportError:
+                pass
+        else:
+            forking_pickler = t.cast(PicklerLike, ForkingPickler)
+        return forking_pickler
+    return t.cast(PicklerLike, importlib.import_module(pickler))
+
+
+class Queue(BaseQueue, QueueLike):
+    def __init__(
+        self,
+        maxsize: int = 0,
+        *,
+        ctx: t.Optional[_ctx.BaseContext] = None,
+        pickler: t.Literal["auto", "cloudpickle", "dill", "pickle"] = "auto",
+    ):
         if maxsize <= 0:
             # Can raise ImportError (see issues #3770 and #23400)
             from multiprocessing.synchronize import SEM_VALUE_MAX  # type: ignore
@@ -42,6 +72,7 @@ class Queue(BaseQueue):
         if not ctx:
             ctx = get_context()
 
+        self._pickler = _get_pickler(pickler)
         self._maxsize = maxsize
         self._reader, self._writer = connection.Pipe(duplex=False)
         self._rlock = ctx.Lock()
@@ -143,7 +174,7 @@ class Queue(BaseQueue):
             finally:
                 self._rlock.release()
         # unserialize the data after having released the lock
-        result = _ForkingPickler.loads(res)
+        result = self._pickler.loads(res)
         self._qsize.value -= 1
         return result
 
@@ -169,6 +200,7 @@ class Queue(BaseQueue):
                 self._on_queue_feeder_error,
                 self._sem,
                 self._qsize,
+                self._pickler,
             ),
             name="QueueFeederThread",
         )
@@ -219,6 +251,7 @@ class Queue(BaseQueue):
         onerror,
         queue_sem,
         qsize,
+        pickler,
     ):
         debug("starting thread to feed data to pipe")
         nacquire = notempty.acquire
@@ -250,11 +283,11 @@ class Queue(BaseQueue):
 
                         # serialize the data before acquiring the lock
                         try:
-                            obj = _ForkingPickler.dumps(obj)
+                            obj = pickler.dumps(obj)
                         except TypeError as exc:
                             if not isinstance(obj, BaseTask):
                                 raise exc
-                            obj = _ForkingPickler.dumps(
+                            obj = pickler.dumps(
                                 obj.__class__(
                                     name=obj.name,
                                     fn=_unpickable_error,

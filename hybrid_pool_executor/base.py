@@ -13,9 +13,6 @@ For python 3.7+, there is no significant speed/size difference between object,
 dataclass and namedtuple.
 """
 
-# TODO: migrate common codes into base.py
-# TODO: discard exception traceback related to workers
-
 
 @dataclass
 class Action:
