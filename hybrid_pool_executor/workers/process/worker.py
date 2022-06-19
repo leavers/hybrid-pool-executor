@@ -29,7 +29,13 @@ from hybrid_pool_executor.constants import (
     ProcessBus,
     ProcessBusType,
 )
-from hybrid_pool_executor.utils import AsyncToSync, get_event_loop, isasync
+from hybrid_pool_executor.utils import (
+    AsyncToSync,
+    get_event_loop,
+    isasync,
+    setproctitle,
+    setthreadtitle,
+)
 from hybrid_pool_executor.workers.process.queue import Queue
 
 
@@ -218,6 +224,8 @@ class ProcessWorker(BaseWorker):
         idle: Event,
         running: Event,
     ):
+        setproctitle(spec.name)
+        setthreadtitle(spec.name)
         inited.set()
         idle.set()
         running.set()

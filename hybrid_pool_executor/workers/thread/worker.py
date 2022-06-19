@@ -31,6 +31,7 @@ from hybrid_pool_executor.utils import (
     WeakClassMethod,
     get_event_loop,
     isasync,
+    setthreadtitle,
 )
 
 
@@ -199,6 +200,7 @@ class ThreadWorker(BaseWorker):
         return response
 
     def _run(self):
+        setthreadtitle(self._name)
         state = self._state
         state.running = True
         state.idle = True

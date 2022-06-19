@@ -9,7 +9,30 @@ from operator import le
 from threading import Lock, Thread
 from types import MethodType
 
+try:
+    import setproctitle as _setproctitle
+except ImportError:
+    _setproctitle = None
+
 T = t.TypeVar("T")
+
+
+def setproctitle(title: str):
+    if not _setproctitle:
+        return
+    try:
+        _setproctitle.setproctitle(title)
+    except:
+        pass
+
+
+def setthreadtitle(title: str):
+    if not _setproctitle:
+        return
+    try:
+        _setproctitle.setthreadtitle(title)
+    except:
+        pass
 
 
 def coalesce(*args) -> t.Any:

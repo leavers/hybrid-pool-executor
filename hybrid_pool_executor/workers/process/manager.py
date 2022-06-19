@@ -27,6 +27,7 @@ from hybrid_pool_executor.utils import (
     WeakClassMethod,
     coalesce,
     rectify,
+    setthreadtitle,
 )
 from hybrid_pool_executor.workers.process.worker import (
     ProcessTask,
@@ -92,6 +93,7 @@ class ProcessManager(BaseManager):
             pass
 
     def _run(self):
+        setthreadtitle(self._name)
         state = self._state
         state.running = True
         state.inited = True
