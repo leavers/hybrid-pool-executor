@@ -20,19 +20,13 @@ T = t.TypeVar("T")
 def setproctitle(title: str):
     if not _setproctitle:
         return
-    try:
-        _setproctitle.setproctitle(title)
-    except:
-        pass
+    _setproctitle.setproctitle(title)
 
 
 def setthreadtitle(title: str):
     if not _setproctitle:
         return
-    try:
-        _setproctitle.setthreadtitle(title)
-    except:
-        pass
+    _setproctitle.setthreadtitle(title)
 
 
 def coalesce(*args) -> t.Any:
