@@ -5,7 +5,7 @@ from concurrent.futures._base import Error, Executor
 from concurrent.futures._base import Future as BaseFuture
 from dataclasses import dataclass, field
 
-from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, Function
+from hybrid_pool_executor.constants import ACT_NONE, ActionFlag, T_co
 from hybrid_pool_executor.utils import get_event_loop
 
 """
@@ -72,7 +72,7 @@ class BaseTask(ABC):
     """
 
     name: str
-    fn: Function
+    fn: t.Union[t.Callable[..., t.Any], t.Coroutine[t.Any, t.Any, t.Any]]
     args: t.Iterable[t.Any] = ()
     kwargs: t.Dict[str, t.Any] = field(default_factory=dict)
     cancelled: bool = False
@@ -155,7 +155,7 @@ class BaseWorker(ABC):
         self.stop()
 
 
-class Future(BaseFuture):
+class Future(BaseFuture, t.Generic[T_co]):
     def __init__(self):
         super().__init__()
         self._loop = get_event_loop()
@@ -168,11 +168,14 @@ class Future(BaseFuture):
 
         self.add_done_callback(cb)
 
-    async def _async_result(self):
+    def result(self, timeout: t.Optional[float] = None) -> T_co:
+        return super().result(timeout=timeout)
+
+    async def _async_result(self) -> T_co:
         await self._async_fut
         return self.result()
 
-    def __await__(self):
+    def __await__(self) -> t.Generator[t.Any, None, T_co]:
         return self._async_result().__await__()
 
 
@@ -194,9 +197,10 @@ class NotSupportedError(Error):
 
 @dataclass
 class BaseManagerSpec(ABC):
-    name_pattern: str = "BaseManager-{manager_seq}"
-    worker_name_pattern: str = "BaseWorker-{worker_seq} [{manager}]"
-    task_name_pattern: str = "BaseTask-{task_seq} [{manager}]"
+    executor_name: str = "executor"
+    name_pattern: str = "{executor}-basemanager{manager_seq}"
+    worker_name_pattern: str = "{manager}-baseworker{worker_seq}"
+    task_name_pattern: str = "{manager}-task{task_seq}"
     num_workers: int = -1
     incremental: bool = True
     wait_interval: float = 0.1
@@ -207,30 +211,30 @@ class BaseManager(BaseWorker):
     @t.overload
     def submit(
         self,
-        fn: t.Coroutine[t.Any, t.Any, t.Any],
+        fn: t.Coroutine[t.Any, t.Any, T_co],
         *,
         name: t.Optional[str] = None,
-    ) -> Future:
+    ) -> Future[T_co]:
         ...
 
     @t.overload
     def submit(
         self,
-        fn: t.Callable[..., t.Any],
+        fn: t.Callable[..., T_co],
         args: t.Optional[t.Iterable[t.Any]] = (),
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
-    ) -> Future:
+    ) -> Future[T_co]:
         ...
 
     @abstractmethod
     def submit(
         self,
-        fn: Function,
+        fn: t.Union[t.Callable[..., T_co], t.Coroutine[t.Any, t.Any, T_co]],
         args: t.Optional[t.Iterable[t.Any]] = (),
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
-    ) -> Future:
+    ) -> Future[T_co]:
         ...
 
 

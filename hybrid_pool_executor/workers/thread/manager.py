@@ -19,7 +19,7 @@ from hybrid_pool_executor.constants import (
     ACT_DONE,
     ACT_EXCEPTION,
     ACT_RESTART,
-    Function,
+    T_co,
 )
 from hybrid_pool_executor.utils import (
     KillableThread,
@@ -37,9 +37,9 @@ from hybrid_pool_executor.workers.thread.worker import (
 
 @dataclass
 class ThreadManagerSpec(BaseManagerSpec):
-    name_pattern: str = "ThreadManager-{manager_seq}"
-    worker_name_pattern: str = "ThreadWorker-{worker_seq} [{manager}]"
-    task_name_pattern: str = "ThreadTask-{task_seq} [{manager}]"
+    name_pattern: str = "tmgr{manager_seq}"
+    worker_name_pattern: str = "{manager}-w{worker_seq}"
+    task_name_pattern: str = "{manager}-t{task_seq}"
     # -1: unlimited; 0: same as num_workers
     max_processing_responses_per_iteration: int = -1
     task_class: t.Type[ThreadTask] = ThreadTask
@@ -64,7 +64,8 @@ class ThreadManager(BaseManager):
         self._worker_class = self._spec.worker_class
         self._worker_spec = dataclasses.replace(spec.worker_spec)
         self._name = self._spec.name_pattern.format(
-            manager_seq=self.__class__._next_manager_seq()
+            executor=self._spec.executor_name,
+            manager_seq=self.__class__._next_manager_seq(),
         )
 
         self._next_worker_seq = itertools.count().__next__
@@ -218,14 +219,14 @@ class ThreadManager(BaseManager):
 
     def submit(
         self,
-        fn: Function,
+        fn: t.Union[t.Callable[..., T_co], t.Coroutine[t.Any, t.Any, T_co]],
         args: t.Optional[t.Iterable[t.Any]] = (),
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
-    ) -> Future:
+    ) -> Future[T_co]:
         self._ensure_running()
         name = self._get_task_name(name)
-        future = Future()
+        future: Future[T_co] = Future()
         task = self._spec.task_class(
             name=name,
             fn=fn,

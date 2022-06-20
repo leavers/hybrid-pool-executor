@@ -18,7 +18,7 @@ class QueueLike(t.Protocol[T_co]):
         ...
 
 
-Function = t.Union[t.Callable[..., t.Any], t.Coroutine[t.Any, t.Any, t.Any]]
+# Function = t.Union[t.Callable[..., t.Any], t.Coroutine[t.Any, t.Any, t.Any]]
 ThreadBus = t.Union[Queue, SimpleQueue]
 ThreadBusType = t.Union[t.Type[Queue], t.Type[SimpleQueue], t.Callable[[], ThreadBus]]
 ProcessBus = QueueLike

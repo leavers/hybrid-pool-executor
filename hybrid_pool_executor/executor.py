@@ -1,4 +1,5 @@
 import atexit
+import itertools
 import time
 import typing as t
 from random import choice
@@ -12,7 +13,7 @@ from hybrid_pool_executor.base import (
     ModuleSpec,
     NotSupportedError,
 )
-from hybrid_pool_executor.constants import Function
+from hybrid_pool_executor.constants import T_co
 from hybrid_pool_executor.spec import ModuleSpecRepo, spec_factory
 from hybrid_pool_executor.utils import isasync, iscoroutine
 
@@ -29,6 +30,8 @@ atexit.register(_python_exit)
 
 
 class HybridPoolExecutor(BaseExecutor):
+    _next_executor_seq = itertools.count().__next__
+
     def __init__(
         self,
         thread_workers: int = -1,
@@ -44,6 +47,7 @@ class HybridPoolExecutor(BaseExecutor):
         async_worker_name_pattern: t.Optional[str] = None,
         redirect_async: t.Optional[str] = None,
         extra_specs: t.Optional[t.Iterable[ModuleSpec]] = None,
+        name: t.Optional[str] = None,
         **kwargs,
     ):
         self._spec_repo: ModuleSpecRepo = spec_factory.get_repo()
@@ -70,6 +74,7 @@ class HybridPoolExecutor(BaseExecutor):
         self._last_clear_ts: float = time.monotonic()
         self._clear_counter: int = 0
 
+        self._name: str = name or f"exec{self.__class__._next_executor_seq()}"
         global _all_executors
         _all_executors.add(self)
         self._is_alive: bool = True
@@ -82,12 +87,14 @@ class HybridPoolExecutor(BaseExecutor):
     def _get_manager(
         cls,
         mode: str,
+        executor_name: str,
         module_spec: ModuleSpec,
         kwargs: t.Dict[str, t.Any],
     ) -> BaseManager:
         if (redirect := kwargs.get(f"redirect_{mode}")) is not None:
             mode = redirect
         manager_spec: BaseManagerSpec = module_spec.manager_spec_type()
+        manager_spec.executor_name = executor_name
         if (num_workers := kwargs.get(f"{mode}_workers")) is not None:
             manager_spec.num_workers = num_workers
         if (incremental := kwargs.get(f"incremental_{mode}_workers")) is not None:
@@ -100,18 +107,21 @@ class HybridPoolExecutor(BaseExecutor):
 
     def submit(  # type: ignore
         self,
-        fn: t.Callable[..., t.Any],
+        fn: t.Callable[..., T_co],
         /,
         *args,
+        _name: t.Optional[str] = None,
+        _mode: t.Optional[str] = None,
+        _tags: t.Optional[t.Iterable[str]] = None,
         **kwargs,
-    ) -> Future:
+    ) -> Future[T_co]:
         return self.submit_task(
             fn,
             args=args,
             kwargs=kwargs,
-            name=kwargs.get("_name"),
-            mode=kwargs.get("_mode"),
-            tags=kwargs.get("_tags"),
+            name=_name,
+            mode=_mode,
+            tags=_tags,
         )
 
     def apply_async(
@@ -174,36 +184,36 @@ class HybridPoolExecutor(BaseExecutor):
     @t.overload
     def submit_task(
         self,
-        fn: t.Coroutine[t.Any, t.Any, t.Any],
+        fn: t.Coroutine[t.Any, t.Any, T_co],
         *,
         name: t.Optional[str] = None,
         mode: t.Optional[str] = None,
         tags: t.Optional[t.Iterable[str]] = None,
-    ) -> Future:
+    ) -> Future[T_co]:
         ...
 
     @t.overload
     def submit_task(
         self,
-        fn: t.Callable[..., t.Any],
+        fn: t.Callable[..., T_co],
         args: t.Optional[t.Iterable[t.Any]] = (),
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
         mode: t.Optional[str] = None,
         tags: t.Optional[t.Iterable[str]] = None,
-    ) -> Future:
+    ) -> Future[T_co]:
         ...
 
     def submit_task(
         self,
-        fn: Function,
+        fn: t.Union[t.Callable[..., T_co], t.Coroutine[t.Any, t.Any, T_co]],
         args: t.Optional[t.Iterable[t.Any]] = (),
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
         mode: t.Optional[str] = None,
         tags: t.Optional[t.Iterable[str]] = None,
         **_,
-    ) -> Future:
+    ) -> Future[T_co]:
         if iscoroutine(fn) and (args or kwargs):
             raise ValueError("Coroutine should not have arguments specified.")
         modes = self._guess_mode(fn, mode, tags)
@@ -225,6 +235,7 @@ class HybridPoolExecutor(BaseExecutor):
             module_spec: ModuleSpec = self._spec_repo[mode]
             manager = self._get_manager(
                 mode=mode,
+                executor_name=self._name,
                 module_spec=module_spec,
                 kwargs=self._manager_kwargs,
             )
@@ -263,7 +274,7 @@ class HybridPoolExecutor(BaseExecutor):
 
     def _guess_mode(
         self,
-        fn: Function,
+        fn: t.Union[t.Callable[..., t.Any], t.Coroutine[t.Any, t.Any, t.Any]],
         mode: t.Optional[str] = None,
         tags: t.Optional[t.Iterable[str]] = None,
     ) -> t.FrozenSet[str]:
