@@ -17,6 +17,7 @@ from hybrid_pool_executor.constants import (
     ACT_CLOSE,
     ACT_DONE,
     ACT_EXCEPTION,
+    ACT_FATAL_ERROR,
     ACT_NONE,
     ACT_RESET,
     ACT_RESTART,
@@ -28,7 +29,9 @@ from hybrid_pool_executor.utils import (
     AsyncToSync,
     KillableThread,
     WeakClassMethod,
+    get_event_loop,
     isasync,
+    setthreadtitle,
 )
 
 
@@ -114,13 +117,9 @@ class ThreadWorker(BaseWorker):
         while not state.inited:
             pass
 
-    def _run(self):
-        state = self._state
-        state.running = True
-        state.idle = True
-        state.inited = True
-
+    def _run_core(self):
         spec = self._spec
+        state = self._state
         get_response = self._get_response
         task_bus: ThreadBus = spec.task_bus
         request_bus: ThreadBus = spec.request_bus
@@ -130,6 +129,7 @@ class ThreadWorker(BaseWorker):
         max_cons_err_count: int = spec.max_cons_err_count
         idle_timeout: float = spec.idle_timeout
         wait_interval: float = spec.wait_interval
+        loop = get_event_loop()
 
         task_count: int = 0
         err_count: int = 0
@@ -167,7 +167,7 @@ class ThreadWorker(BaseWorker):
                 if task.cancelled:
                     raise CancelledError(f'Future "{task.name}" has been cancelled')
                 if isasync(task.fn):
-                    result = AsyncToSync(task.fn)(*task.args, **task.kwargs)
+                    result = AsyncToSync(task.fn, loop=loop)(*task.args, **task.kwargs)
                 else:
                     result = task.fn(*task.args, **task.kwargs)
             except Exception as exc:
@@ -197,6 +197,27 @@ class ThreadWorker(BaseWorker):
                     break
                 response_bus.put(response)
                 response = None
+        return response
+
+    def _run(self):
+        setthreadtitle(self._name)
+        state = self._state
+        state.running = True
+        state.idle = True
+        state.inited = True
+
+        spec = self._spec
+        response_bus: ThreadBus = spec.response_bus
+        response: t.Optional[Action] = None
+
+        try:
+            response = self._run_core()
+        except Exception as exc:
+            response = Action(
+                flag=ACT_CLOSE | ACT_FATAL_ERROR,
+                worker_name=spec.name,
+                exception=exc,
+            )
 
         state.idle = False
         state.running = False

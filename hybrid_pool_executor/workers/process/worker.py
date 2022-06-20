@@ -21,6 +21,7 @@ from hybrid_pool_executor.constants import (
     ACT_CLOSE,
     ACT_DONE,
     ACT_EXCEPTION,
+    ACT_FATAL_ERROR,
     ACT_NONE,
     ACT_RESET,
     ACT_RESTART,
@@ -28,7 +29,13 @@ from hybrid_pool_executor.constants import (
     ProcessBus,
     ProcessBusType,
 )
-from hybrid_pool_executor.utils import AsyncToSync, isasync
+from hybrid_pool_executor.utils import (
+    AsyncToSync,
+    get_event_loop,
+    isasync,
+    setproctitle,
+    setthreadtitle,
+)
 from hybrid_pool_executor.workers.process.queue import Queue
 
 
@@ -42,9 +49,9 @@ class ProcessWorkerSpec(BaseWorkerSpec):
     task_bus_type: ProcessBusType = Queue
     request_bus_type: ProcessBusType = Queue
     response_bus_type: ProcessBusType = Queue
-    task_bus: t.Optional[ProcessBus] = None
-    request_bus: t.Optional[ProcessBus] = None
-    response_bus: t.Optional[ProcessBus] = None
+    task_bus: t.Optional[ProcessBus[ProcessTask]] = None
+    request_bus: t.Optional[ProcessBus[Action]] = None
+    response_bus: t.Optional[ProcessBus[Action]] = None
     task_bus_qsize: Synchronized = field(
         default_factory=t.cast(
             t.Callable[[], Synchronized],
@@ -107,16 +114,11 @@ class ProcessWorker(BaseWorker):
             pass
 
     @staticmethod
-    def _run(
+    def _run_core(
         spec: ProcessWorkerSpec,
-        inited: Event,
         idle: Event,
         running: Event,
-    ):
-        inited.set()
-        idle.set()
-        running.set()
-
+    ) -> t.Optional[Action]:
         worker_name = spec.name
         curr_task_name: t.Optional[str] = None
 
@@ -142,6 +144,7 @@ class ProcessWorker(BaseWorker):
         max_cons_err_count = spec.max_cons_err_count
         idle_timeout = spec.idle_timeout
         wait_interval = spec.wait_interval
+        loop = get_event_loop()
 
         task_count = 0
         err_count = 0
@@ -160,8 +163,11 @@ class ProcessWorker(BaseWorker):
                     task_count = 0
                     err_count = 0
                     cons_err_count = 0
-                if request.match(ACT_CLOSE, ACT_RESTART):
-                    response = get_response(request.flag)
+                if request.match(ACT_CLOSE, ACT_RESTART, ACT_FATAL_ERROR):
+                    response = get_response(
+                        flag=request.flag,
+                        exception=request.exception,
+                    )
                     should_exit = True
                     break
             if should_exit or not running.is_set():
@@ -180,7 +186,7 @@ class ProcessWorker(BaseWorker):
                 if task.cancelled:
                     raise CancelledError(f'Future "{task.name}" has been cancelled')
                 if isasync(task.fn):
-                    result = AsyncToSync(task.fn)(*task.args, **task.kwargs)
+                    result = AsyncToSync(task.fn, loop=loop)(*task.args, **task.kwargs)
                 else:
                     task.fn = t.cast(t.Callable[..., t.Any], task.fn)
                     result = task.fn(*task.args, **task.kwargs)
@@ -209,6 +215,32 @@ class ProcessWorker(BaseWorker):
                     break
                 response_bus.put(response)
                 response = None
+        return response
+
+    @staticmethod
+    def _run(
+        spec: ProcessWorkerSpec,
+        inited: Event,
+        idle: Event,
+        running: Event,
+    ):
+        setproctitle(spec.name)
+        setthreadtitle(spec.name)
+        inited.set()
+        idle.set()
+        running.set()
+
+        response_bus = t.cast(ProcessBus, spec.response_bus)
+        response: t.Optional[Action] = None
+
+        try:
+            response = ProcessWorker._run_core(spec=spec, idle=idle, running=running)
+        except Exception as exc:
+            response = Action(
+                flag=ACT_CLOSE | ACT_FATAL_ERROR,
+                worker_name=spec.name,
+                exception=exc,
+            )
 
         idle.clear()
         running.clear()

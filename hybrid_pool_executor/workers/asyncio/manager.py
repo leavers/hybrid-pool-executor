@@ -18,9 +18,9 @@ NoneType = type(None)
 
 @dataclass
 class AsyncManagerSpec(ThreadManagerSpec):
-    name_pattern: str = "AsyncManager-{manager_seq}"
-    worker_name_pattern: str = "AsyncWorker-{worker_seq} [{manager}]"
-    task_name_pattern: str = "AsyncTask-{task_seq} [{manager}]"
+    name_pattern: str = "{executor}-amgr{manager_seq}"
+    worker_name_pattern: str = "{manager}-w{worker_seq}"
+    task_name_pattern: str = "{manager}-t{task_seq}"
     num_workers: int = 1
     task_class: t.Type[AsyncTask] = AsyncTask
     worker_class: t.Type[AsyncWorker] = AsyncWorker

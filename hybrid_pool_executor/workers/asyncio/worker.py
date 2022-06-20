@@ -13,7 +13,7 @@ from hybrid_pool_executor.constants import (
     ACT_RESET,
     ACT_RESTART,
 )
-from hybrid_pool_executor.utils import iscoroutine, iscoroutinefunction
+from hybrid_pool_executor.utils import iscoroutine, iscoroutinefunction, setthreadtitle
 from hybrid_pool_executor.workers.thread import (
     ThreadTask,
     ThreadWorker,
@@ -209,5 +209,6 @@ class AsyncWorker(ThreadWorker):
         self._thread = None
 
     def _run(self):
+        setthreadtitle(self._name)
         self._loop = asyncio.new_event_loop()
         self._loop.run_until_complete(self._async_run())

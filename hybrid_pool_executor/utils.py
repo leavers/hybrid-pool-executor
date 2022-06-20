@@ -9,7 +9,24 @@ from operator import le
 from threading import Lock, Thread
 from types import MethodType
 
+try:
+    import setproctitle as _setproctitle
+except ImportError:
+    _setproctitle = None
+
 T = t.TypeVar("T")
+
+
+def setproctitle(title: str):
+    if not _setproctitle:
+        return
+    _setproctitle.setproctitle(title)
+
+
+def setthreadtitle(title: str):
+    if not _setproctitle:
+        return
+    _setproctitle.setthreadtitle(title)
 
 
 def coalesce(*args) -> t.Any:
@@ -56,6 +73,16 @@ ismethod = inspect.ismethod
 
 def isasync(object: t.Any):
     return iscoroutine(object) or iscoroutinefunction(object)
+
+
+def deconstruct_coroutine(
+    coro: t.Coroutine,
+) -> t.Tuple[t.Callable, t.Tuple[t.Any, ...], t.Dict[str, t.Any]]:
+    if not iscoroutine(coro):
+        raise TypeError(
+            f'Param "coro" is expected to be a coroutine, got {type(coro)} instead.'
+        )
+    raise NotImplementedError
 
 
 _singleton_instances = {}
