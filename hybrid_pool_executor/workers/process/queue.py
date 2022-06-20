@@ -102,6 +102,7 @@ class Queue(BaseQueue, QueueLike):
             self._sem,
             self._opid,
             self._qsize,
+            self._pickler,
         )
 
     def __setstate__(self, state):
@@ -115,6 +116,7 @@ class Queue(BaseQueue, QueueLike):
             self._sem,
             self._opid,
             self._qsize,
+            self._pickler,
         ) = state
         self._reset()
 
