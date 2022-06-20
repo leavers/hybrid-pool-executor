@@ -72,7 +72,8 @@ class Queue(BaseQueue, QueueLike):
         if not ctx:
             ctx = get_context()
 
-        self._pickler = _get_pickler(pickler)
+        self._pickler = pickler
+        self._fork_pickler = _get_pickler(self._pickler)
         self._maxsize = maxsize
         self._reader, self._writer = connection.Pipe(duplex=False)
         self._rlock = ctx.Lock()
@@ -138,6 +139,7 @@ class Queue(BaseQueue, QueueLike):
         self._send_bytes = self._writer.send_bytes
         self._recv_bytes = self._reader.recv_bytes
         self._poll = self._reader.poll
+        self._fork_pickler = _get_pickler(self._pickler)
 
     def put(self, obj, block=True, timeout=None):
         if self._closed:
@@ -176,7 +178,7 @@ class Queue(BaseQueue, QueueLike):
             finally:
                 self._rlock.release()
         # unserialize the data after having released the lock
-        result = self._pickler.loads(res)
+        result = self._fork_pickler.loads(res)
         self._qsize.value -= 1
         return result
 
@@ -202,7 +204,7 @@ class Queue(BaseQueue, QueueLike):
                 self._on_queue_feeder_error,
                 self._sem,
                 self._qsize,
-                self._pickler,
+                self._fork_pickler,
             ),
             name="QueueFeederThread",
         )
