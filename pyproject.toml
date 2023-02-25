@@ -1,83 +1,48 @@
-[build-system]
-requires = ["setuptools>=62.0.0", "setuptools-scm"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "hybrid-pool-executor"
-description = "Pool executor supporting thread, process and async."
-readme = "README.rst"
-authors = [
-    { name = "Leavers" },
-    { email = "leavers930@gmail.com" },
-]
-license = { text = "MIT License" }
-dependencies = []
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Natural Language :: English",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    "Topic :: Utilities",
-    "Topic :: Software Development",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-]
-keywords = ["concurrent", "thread"]
-requires-python = ">=3.8"
-dynamic = ["version"]
-
-[project.optional-dependencies]
-extra = ["cloudpickle"]
+[tool.pdm]
+[tool.pdm.dev-dependencies]
 dev = [
-    "bumpver",
-    "black",
-    "coverage[toml]>=5.3",
-    "isort>=5.0.0",
-    "mypy",
-    "pyproject-autoflake",
-    "pyproject-flake8",
-    "pytest>=6.2.5",
-    "pytest-asyncio",
-    "pytest-timeout",
-    "sphinx",
-    "sphinx-rtd-theme",
-    "tox",
+    "bumpver>=2022.1120",
+    "black>=23.1.0",
+    "coverage[toml]>=7.2.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.1",
+    "pyproject-autoflake>=1.0.2",
+    "pyproject-flake8>=5.0.4.post1",
+    "pytest>=7.2.1",
+    "pytest-asyncio>=0.20.3",
+    "pytest-timeout>=2.1.0",
+    "sphinx>=6.1.3",
+    "sphinx-rtd-theme>=1.2.0",
+    "nox>=2022.11.21",
 ]
+lint = [
+    "black>=23.1.0",
+    "isort>=5.12.0",
+    "pyproject-autoflake>=1.0.2",
+    "pyproject-flake8>=5.0.4.post1",
+]
+mypy = ["mypy>=1.0.1"]
 
-[tool.setuptools.packages.find]
-include = ["hybrid_pool_executor*"]
-exclude = ["tests"]
+[tool.pdm.scripts]
+autoflake_ = "pautoflake hybrid_pool_executor tests noxfile.py"
+black_ = "black hybrid_pool_executor tests noxfile.py"
+flake_ = "pflake8 hybrid_pool_executor tests noxfile.py"
+format = {composite = ["autoflake_", "isort_", "black_"]}
+isort_ = "isort hybrid_pool_executor tests noxfile.py"
+lint = {composite = ["flake_", "mypy_"]}
+mypy_ = "mypy hybrid_pool_executor tests noxfile.py"
+static_check = {composite = ["mypy_"]}
 
-[tool.setuptools.dynamic]
-version = { attr = "hybrid_pool_executor.__version__" }
-
-[tool.bumpver]
-current_version = "0.0.4"
-version_pattern = "MAJOR.MINOR.PATCH"
-commit_message  = "Bump version {old_version} -> {new_version}"
-commit = true
-tag = false
-push = false
-
-[tool.bumpver.file_patterns]
-# use "bumpver update --major/minor/patch --dry" to test
-"pyproject.toml" = ['version = "{version}"']
-"hybrid_pool_executor/__init__.py" = ['__version__ = "{version}"']
+[tool.autoflake]
+in-place = true
+recursive = true
+remove-all-unused-imports = true
+ignore-init-module-imports = true
+remove-duplicate-keys = true
+remove-unused-variables = true
 
 [tool.black]
 line-length = 88
-
-[tool.isort]
-profile = "black"
-src_paths = ["hybrid_pool_executor", "tests", "setup.py"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "strict"
 
 [tool.coverage.run]
 branch = true
@@ -94,16 +59,52 @@ extend-ignore = "E203,"
 # better to use whitelist: "exclude" makes flake8 process a huge amount of files
 # exclude = [".git", "__pycache__", "build", "dist"]
 
-[tool.autoflake]
-in-place = true
-recursive = true
-remove-all-unused-imports = true
-ignore-init-module-imports = true
-remove-duplicate-keys = true
-remove-unused-variables = true
+[tool.isort]
+profile = "black"
+src_paths = ["hybrid_pool_executor", "tests", "noxfile.py"]
 
 [tool.mypy]
+check_untyped_defs = true
 ignore_missing_imports = true
 show_error_codes = true
 # use comment "type: ignore" to ignore single line
 # use comment "type: ignore[error-code] to ignore single error"
+
+[tool.pyright]
+extraPaths = ["__pypackages__/3.8/lib/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+
+[project]
+name = "hybrid-pool-executor"
+version = "0.0.4"
+description = "Pool executor supporting thread, process and async."
+authors = [
+    {name = "Leavers", email = "leavers930@gmail.com"},
+]
+dependencies = []
+requires-python = ">=3.8"
+readme = "README.rst"
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Natural Language :: English",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Utilities",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["concurrent", "thread"]
+
+[build-system]
+requires = ["pdm-pep517>=1.0"]
+build-backend = "pdm.pep517.api"
