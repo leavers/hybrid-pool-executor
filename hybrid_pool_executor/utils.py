@@ -75,16 +75,6 @@ def isasync(object: t.Any):
     return iscoroutine(object) or iscoroutinefunction(object)
 
 
-def deconstruct_coroutine(
-    coro: t.Coroutine,
-) -> t.Tuple[t.Callable, t.Tuple[t.Any, ...], t.Dict[str, t.Any]]:
-    if not iscoroutine(coro):
-        raise TypeError(
-            f'Param "coro" is expected to be a coroutine, got {type(coro)} instead.'
-        )
-    raise NotImplementedError
-
-
 _singleton_instances = {}
 _singleton_lock = Lock()
 

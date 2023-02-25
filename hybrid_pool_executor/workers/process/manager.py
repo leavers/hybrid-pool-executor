@@ -13,6 +13,7 @@ from hybrid_pool_executor.base import (
     BaseManager,
     BaseManagerSpec,
     Future,
+    NotSupportedError,
     adjust_worker_iterator,
 )
 from hybrid_pool_executor.constants import (
@@ -26,6 +27,7 @@ from hybrid_pool_executor.utils import (
     KillableThread,
     WeakClassMethod,
     coalesce,
+    iscoroutine,
     rectify,
     setthreadtitle,
 )
@@ -231,6 +233,10 @@ class ProcessManager(BaseManager):
         kwargs: t.Optional[t.Dict[str, t.Any]] = None,
         name: t.Optional[str] = None,
     ) -> Future[T_co]:
+        if iscoroutine(fn):
+            raise NotSupportedError(
+                f"Coroutine cannot be executed by process worker, got {fn}."
+            )
         self._ensure_running()
         name = self._get_task_name(name)
         future: Future[T_co] = Future()
