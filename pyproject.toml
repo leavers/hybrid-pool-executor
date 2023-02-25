@@ -25,13 +25,19 @@ mypy = ["mypy>=1.0.1"]
 
 [tool.pdm.scripts]
 autoflake_ = "pautoflake hybrid_pool_executor tests noxfile.py"
+autoflake_check = "pautoflake --check hybrid_pool_executor tests noxfile.py"
 black_ = "black hybrid_pool_executor tests noxfile.py"
+black_check = "black --check hybrid_pool_executor tests noxfile.py"
 flake_ = "pflake8 hybrid_pool_executor tests noxfile.py"
 format = {composite = ["autoflake_", "isort_", "black_"]}
+format_check = {composite = ["autoflake_check", "isort_check", "black_check"]}
 isort_ = "isort hybrid_pool_executor tests noxfile.py"
+isort_check = "isort --check hybrid_pool_executor tests noxfile.py"
 lint = {composite = ["flake_", "mypy_"]}
 mypy_ = "mypy hybrid_pool_executor tests noxfile.py"
+pytest_ = "pytest tests"
 static_check = {composite = ["mypy_"]}
+test = {composite = ["pytest_"]}
 
 [tool.autoflake]
 in-place = true
